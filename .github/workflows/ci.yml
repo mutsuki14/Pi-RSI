@@ -24,3 +24,5 @@ jobs:
         run: npm run e2e
       - name: CLI end-to-end (rollback isolation)
         run: RSI_ISOLATION=rollback npm run e2e
+      - name: CLI end-to-end (installed with pi install)
+        run: E2E_INSTALL=1 npm run e2e

@@ -5,10 +5,13 @@
 # OpenAI-compatible mock server, and checks what landed on disk.
 set -euo pipefail
 
+# No background network activity (catalog refresh, version check, telemetry): the run is fully local.
+export PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pi_bin="${PI_BIN:-$here/node_modules/.bin/pi}"
 work="$(mktemp -d "${TMPDIR:-/tmp}/pi-rsi-e2e-XXXXXX")"
-trap 'kill "${mock_pid:-0}" 2>/dev/null || true; rm -rf "$work"' EXIT
+trap 'kill "${mock_pid:-0}" 2>/dev/null || true; [ -n "${E2E_KEEP:-}" ] || rm -rf "$work"' EXIT
 
 agent="$work/agent"
 project="$work/project"
@@ -43,9 +46,17 @@ cat > "$agent/models.json" <<JSON
 JSON
 printf '{ "verifier": { "isolation": "%s" } }\n' "${RSI_ISOLATION:-auto}" > "$agent/rsi.json"
 
+# E2E_INSTALL=1 loads pi-rsi as an installed pi package instead of with --extension.
+# pi reads piped stdin as extra prompt input, so every pi call gets /dev/null.
+load=(-ne -e "$here/src/index.ts")
+if [ "${E2E_INSTALL:-0}" = 1 ]; then
+  PI_CODING_AGENT_DIR="$agent" timeout 120 "$pi_bin" install "$here" </dev/null >"$work/install.txt" 2>&1 || { cat "$work/install.txt" >&2; exit 1; }
+  load=()
+fi
+
 cd "$project"
-output="$(PI_CODING_AGENT_DIR="$agent" "$pi_bin" --print --no-session -ne -e "$here/src/index.ts" \
-  --model mock/mock-1 --thinking off "Create hello.txt containing the word hello." 2>"$work/stderr.txt")" || {
+output="$(PI_CODING_AGENT_DIR="$agent" "$pi_bin" --print --no-session "${load[@]}" \
+  --model mock/mock-1 --thinking off "Create hello.txt containing the word hello." </dev/null 2>"$work/stderr.txt")" || {
   echo "pi exited with an error" >&2
   cat "$work/stderr.txt" >&2
   cat "$log" >&2
@@ -77,4 +88,4 @@ journal="$(find "$agent/rsi/projects" -name journal.jsonl | head -1)"
 if [ "${RSI_ISOLATION:-auto}" != rollback ] && command -v bwrap >/dev/null && bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid true 2>/dev/null; then
   grep -q "Read-only file system" "$log" || fail "the sandboxed Verifier could write the candidate"
 fi
-echo "pi-rsi e2e passed (isolation ${RSI_ISOLATION:-auto})"
+echo "pi-rsi e2e passed (isolation ${RSI_ISOLATION:-auto}${E2E_INSTALL:+, installed package})"
