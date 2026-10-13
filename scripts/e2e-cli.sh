@@ -74,5 +74,7 @@ grep -q 'Memory promoted (PASS experience)' "$log" || fail "commit result missin
 journal="$(find "$agent/rsi/projects" -name journal.jsonl | head -1)"
 [ "$(wc -l < "$journal")" -eq 1 ] || fail "expected one journal record"
 
-if [ "${RSI_ISOLATION:-auto}" != rollback ] && command -v bwrap >/dev/null; then grep -q "Read-only file system" "$log" || fail "the sandboxed Verifier could write the candidate"; fi
+if [ "${RSI_ISOLATION:-auto}" != rollback ] && command -v bwrap >/dev/null && bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid true 2>/dev/null; then
+  grep -q "Read-only file system" "$log" || fail "the sandboxed Verifier could write the candidate"
+fi
 echo "pi-rsi e2e passed (isolation ${RSI_ISOLATION:-auto})"

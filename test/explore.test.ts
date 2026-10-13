@@ -79,9 +79,9 @@ describe('exploration lineages', () => {
     expect(record.officialEvaluatorCalls).toBe(0)
     const events = (await readFile(join(state, 'lineages', lineage!, 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).type)
     expect(events).toEqual(['WAVE_AUTHORED', 'WAVE_FIXTURES_CAPTURED', 'PROJECT_SUBMITTED', 'PROJECT_VERIFIED', 'MEMORY_COMMITTED', 'WAVE_COMPLETED', 'PHASE1_TERMINATED'])
-    // Role transcripts are persisted privately for inspection.
-    const sessions = await readdir(join(state, 'lineages', lineage!, 'sessions')).catch(() => [])
-    expect(Array.isArray(sessions)).toBe(true)
+    // Role transcripts are persisted privately for inspection: curriculum, actor, verifier.
+    const sessions = await readdir(join(state, 'lineages', lineage!, 'sessions'))
+    expect(sessions.filter(name => name.endsWith('.jsonl'))).toHaveLength(3)
   })
 
   it('Phase 2: attempts the target, learns with a diagnosis, and stops on a verifier PASS', async () => {

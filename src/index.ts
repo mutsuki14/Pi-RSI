@@ -1,14 +1,14 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { lstat, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { ConfigError, loadConfig, type LoadedConfig } from './config.ts'
 import type { EngineEvent } from './engine/types.ts'
 import { actorProtocol, memoryPreamble, memoryRevisit } from './roles/actor.ts'
-import { describeEvent, runExploration, validateRequest, type ExploreRequest } from './host/explore.ts'
+import { describeEvent, newLineageId, runExploration, validateRequest, type ExploreRequest } from './host/explore.ts'
 import { Host, roleSettings, snapshotModels } from './host/host.ts'
 import { registerInteractive } from './host/interactive.ts'
-import type { ThinkingLevel } from './host/role-runtime.ts'
+import type { PiRoleRuntime, ThinkingLevel } from './host/role-runtime.ts'
 import { physical } from './host/sandbox.ts'
 import { runSealedEvaluation } from './host/sealed.ts'
 import { foldBranch, type BranchEntry } from './host/task-state.ts'
@@ -130,11 +130,18 @@ export default function piRsi(pi: ExtensionAPI): void {
       return undefined
     }
     if (current.config.mode === 'off') return undefined
-    const store = await current.store()
-    const frozen = current.config.mode === 'frozen' || (await store.frozen())
-    const inventory = current.inventory() ?? (await store.inventory())
+    let frozen = current.config.mode === 'frozen'
+    let memory: string
+    try {
+      const store = await current.store()
+      frozen ||= await store.frozen()
+      memory = memoryPreamble(current.inventory() ?? (await store.inventory()), current.config.promptInventory)
+    } catch (error) {
+      // A damaged store must not block the user's turn; the tools report the details.
+      memory = `[YOUR MEMORY — unavailable: ${error instanceof Error ? error.message : String(error)}]`
+    }
     event.systemPromptOptions.sections.rsi_protocol = actorProtocol(frozen ? 'frozen' : 'learn', current.config.verifier.allowUnverified)
-    event.systemPromptOptions.sections.rsi_memory = memoryPreamble(inventory, current.config.promptInventory)
+    event.systemPromptOptions.sections.rsi_memory = memory
     if (revisit && event.messageType === 'user') {
       const kind = revisit
       revisit = undefined
@@ -153,25 +160,32 @@ export default function piRsi(pi: ExtensionAPI): void {
     const problem = validateRequest(request)
     if (problem) throw new Error(problem)
     if (current.exploration) throw new Error(`lineage ${current.exploration.lineage} is already running in this project; stop it with /rsi-explore stop`)
+    // Claimed before any await, so two starts can never run side by side.
     const controller = new AbortController()
+    const lineage = request.lineage ?? newLineageId(request.phase)
+    const state = { lineage, controller, started: Date.now(), phase: request.phase }
+    current.exploration = state
     const onAbort = () => controller.abort()
     signal?.addEventListener('abort', onAbort, { once: true })
-    const usage = new UsageMeter()
-    const thinking = pi.getThinkingLevel() as ThinkingLevel
-    const isolation = await current.isolation()
-    const lineageId = request.lineage
-    const runtime = await current.roleRuntime(ctx, {
-      thinking,
-      settings: roleSettings(pi.getSettings() as unknown as Record<string, unknown>),
-      usage,
-      observe: event => {
-        if (event.type === 'open') progress(`${event.label}: opened (${event.detail})`)
-      },
-    })
-    const state = { lineage: lineageId ?? '(starting)', controller, started: Date.now(), phase: request.phase }
-    current.exploration = state
+    if (signal?.aborted) controller.abort()
+    let runtime: PiRoleRuntime | undefined
     try {
-      const { lineage, result } = await runExploration({
+      if (await lstat(join(current.paths.lineages, lineage)).then(() => true, () => false)) {
+        throw new Error(`lineage ${lineage} already exists; choose a new lineage id`)
+      }
+      const usage = new UsageMeter()
+      const thinking = pi.getThinkingLevel() as ThinkingLevel
+      const isolation = await current.isolation()
+      runtime = await current.roleRuntime(ctx, {
+        thinking,
+        settings: roleSettings(pi.getSettings() as unknown as Record<string, unknown>),
+        usage,
+        ...(current.config.persistRoleSessions ? { sessionDir: join(current.paths.lineages, lineage, 'sessions') } : {}),
+        observe: event => {
+          if (event.type === 'open') progress(`${event.label}: opened (${event.detail})`)
+        },
+      })
+      const { result } = await runExploration({
         config: current.config,
         paths: current.paths,
         store,
@@ -180,17 +194,16 @@ export default function piRsi(pi: ExtensionAPI): void {
         hidden: current.hiddenPaths(ctx),
         crossModelVerifier: current.crossModel(snapshotModels(ctx), thinking),
         observe: (event: EngineEvent) => {
-          if (typeof event.lineage === 'string') state.lineage = event.lineage
           const line = describeEvent(event)
           if (line) progress(line)
         },
         signal: controller.signal,
-      }, request)
+      }, { ...request, lineage })
       await current.refreshInventory()
       return { lineage, result, usage }
     } finally {
       signal?.removeEventListener('abort', onAbort)
-      await runtime.closeAll()
+      await runtime?.closeAll()
       if (current.exploration === state) current.exploration = undefined
     }
   }

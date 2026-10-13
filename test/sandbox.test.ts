@@ -6,13 +6,17 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { decideIsolation, privatePathGuard, resetIsolationCache, sandboxCommand } from '../src/host/sandbox.ts'
 import { call, lastInput, makeHarness, say, toolResults, type Harness } from './harness.ts'
 
-const hasBwrap = (() => {
+/** Sandbox tests run only where bubblewrap really confines (installed, and user namespaces allowed). */
+const hasBwrap = await (async () => {
   try {
     execFileSync('sh', ['-c', 'command -v bwrap'], { stdio: 'ignore' })
-    return process.platform === 'linux'
   } catch {
     return false
   }
+  resetIsolationCache()
+  const decision = await decideIsolation('auto')
+  resetIsolationCache()
+  return decision.mode === 'sandbox'
 })()
 
 let harness: Harness | undefined

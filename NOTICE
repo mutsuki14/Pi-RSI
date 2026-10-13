@@ -1,0 +1,24 @@
+pi-rsi
+Copyright 2026 pi-rsi contributors
+
+This product adapts the role prompts, transport tokens, memory-commit
+pipeline, and Phase 1 / Phase 2 lineage protocol of RSIAgent
+(https://github.com/AetherLabsAI/RSIAgent), Copyright 2026 RSIAgent
+contributors, licensed under the Apache License, Version 2.0:
+
+  Sibo Zhu, Shicheng Fan, Xinyue Wang, Wenyi Wu, Kun Zhou, Biwei Huang.
+  "RSIAgent: Autonomous Exploration for Recursive Self-improvement in New
+  Environments." arXiv:2609.15364, 2026.
+
+The harness-independent engine (src/engine, src/memory, src/protocol,
+src/roles) and the host modules src/host/git.ts, src/host/checkpoint.ts and
+src/host/sealed.ts are adapted from dsh-rsi
+(https://github.com/mutsuki14/dsh-rsi), Copyright 2026 dsh-rsi
+contributors, licensed under the Apache License, Version 2.0. The prompts
+were rewritten for pi's turn-based role sessions.
+
+No RSIAgent benchmark, VM, or evaluator code is included.
+
+pi (https://github.com/earendil-works/pi) is MIT-licensed; this package
+uses its published npm packages as peer dependencies and does not
+redistribute them.
