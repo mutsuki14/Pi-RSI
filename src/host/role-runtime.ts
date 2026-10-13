@@ -17,6 +17,7 @@ import { InfraError, type OpenRoleOptions, type RoleConversation, type RoleKind,
 import type { MemoryStore } from '../memory/store.ts'
 import { memoryRevisit, truncatedContinuation } from '../roles/actor.ts'
 import { memoryReadTools, memoryWriteTools, type MemoryToolHooks } from './memory-tools.ts'
+import { guardedFileTools } from './guarded-tools.ts'
 import { privatePathGuard, sandboxCommand, type IsolationDecision } from './sandbox.ts'
 import { UsageMeter } from './usage.ts'
 
@@ -56,14 +57,8 @@ export interface PiRoleRuntimeOptions {
 }
 
 const CODING_TOOLS = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
-const FILE_TOOLS: Record<string, { key: string, recursive: boolean }> = {
-  read: { key: 'path', recursive: false },
-  write: { key: 'path', recursive: false },
-  edit: { key: 'path', recursive: false },
-  ls: { key: 'path', recursive: false },
-  grep: { key: 'path', recursive: true },
-  find: { key: 'path', recursive: true },
-}
+/** Built-in file tools that role sessions get in guarded form. */
+const FILE_TOOLS = new Set(['read', 'write', 'edit', 'ls', 'grep', 'find'])
 /** Bound on output-limit continuations inside one segment; each is a fresh model step, not a handoff. */
 const MAX_TRUNCATION_CONTINUATIONS = 4
 
@@ -179,41 +174,32 @@ class PiRoleConversation implements RoleConversation {
       if (role === 'curriculum' && notesFile) pi.registerTool(notesTool(notesFile))
 
       const verifier = role === 'verifier'
-      // Lineage roles see only their own tree of the lineage workspace; every role is kept out of harness-private paths.
-      // The interactive Verifier (no `visible`) works on the user's project, where only the private paths are hidden.
-      const guard = privatePathGuard(runtime.hidden, visible)
+      // Every role is kept out of the harness's private state (the pi agent directory, pi-rsi state, sessions),
+      // except its own tree and scratch: a lineage role's own episode or authoring tree, the interactive
+      // Verifier's project. Sibling projects and other lineages live inside the hidden state root.
+      const own = visible?.own ?? cwd
+      const guard = privatePathGuard(runtime.hidden, [own, scratch])
+      const fileTools = this.#tools().filter(name => FILE_TOOLS.has(name))
+      for (const tool of guardedFileTools(cwd, guard, fileTools)) pi.registerTool(tool)
       const bwrap = runtime.isolation.mode === 'sandbox' ? runtime.isolation.bwrap : undefined
       const bash = createBashToolDefinition(cwd, {
         spawnHook: ({ command, cwd: commandCwd, env }) => {
           const scratchEnv = { ...env, RSI_SCRATCH: scratch, TMPDIR: scratch }
           if (!bwrap) return { command, cwd: commandCwd, env: scratchEnv }
-          const spec = {
-            cwd: commandCwd,
-            scratch,
-            hidden: runtime.hidden,
-            mode: verifier ? 'readonly' as const : 'visibility' as const,
-            ...(visible ? { confine: visible } : {}),
-          }
+          const spec = { cwd: commandCwd, own, scratch, hidden: runtime.hidden, mode: verifier ? 'readonly' as const : 'visibility' as const }
           return { command: sandboxCommand(bwrap, spec, command), cwd: commandCwd, env: scratchEnv }
         },
       })
       pi.registerTool(bash as ToolDefinition<any, any>)
-      pi.on('tool_call', async event => {
-        const input = event.input as Record<string, unknown>
-        if (verifier && (event.toolName === 'write' || event.toolName === 'edit')) return { block: true, reason: `${event.toolName} is not available to the Verifier` }
-        const file = FILE_TOOLS[event.toolName]
-        if (file) {
-          const target = typeof input[file.key] === 'string' && input[file.key] !== '' ? (input[file.key] as string) : cwd
-          const reason = guard.check(target, cwd, file.recursive)
+      // Unconfined shells get a tripwire only: refuse commands that name a hidden path.
+      if (!bwrap) {
+        pi.on('tool_call', async event => {
+          const command = (event.input as Record<string, unknown>).command
+          if (event.toolName !== 'bash' || typeof command !== 'string') return undefined
+          const reason = guard.checkCommand(command)
           return reason ? { block: true, reason } : undefined
-        }
-        // In the sandbox the masks are real; unconfined, refuse commands that name a hidden path.
-        if (event.toolName === 'bash' && !bwrap && typeof input.command === 'string') {
-          const reason = guard.checkCommand(input.command)
-          return reason ? { block: true, reason } : undefined
-        }
-        return undefined
-      })
+        })
+      }
     }
   }
 
@@ -306,9 +292,10 @@ class PiRoleConversation implements RoleConversation {
           continue
         }
         if (last.stopReason === 'error' || last.stopReason === 'aborted') {
-          // A provider failure is not a handoff: the engine counts it like any segment without one.
-          this.#observe('error', last.errorMessage ?? last.stopReason)
-          return { text: '', actions }
+          // pi already retried transient provider failures; what remains is infrastructure, with its reason.
+          const reason = last.errorMessage ?? `the model run ended with stop reason ${last.stopReason}`
+          this.#observe('error', reason)
+          throw new InfraError(`${this.role.label}: model request failed (${reason})`)
         }
         const reply = textOf(last)
         this.#observe('reply', reply.split('\n').find(line => line.trim() !== '')?.slice(0, 120) ?? '')
@@ -326,8 +313,11 @@ class PiRoleConversation implements RoleConversation {
    * event `fold`). The first message is the role's opening brief.
    */
   #prepare(message: string): string {
-    if (this.#first === undefined) {
+    // A persisting Verifier gets a complete charter per inspection: the latest one is its brief.
+    const charter = this.role.role === 'verifier' && message.startsWith('VERIFIER AGENT — CANDIDATE VERIFICATION.')
+    if (this.#first === undefined || charter) {
       this.#first = message
+      this.#compacted = false
       return message
     }
     if (!this.#compacted) return message

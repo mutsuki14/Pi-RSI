@@ -27,21 +27,25 @@ afterEach(async () => {
 })
 
 describe('private path guard', () => {
-  it('refuses hidden paths, their symlinks, and recursive searches above them', async () => {
+  it('refuses hidden paths and their symlinks, allows the own tree inside them, and refuses recursive searches above them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-rsi-guard-'))
     try {
       const hidden = join(root, 'private')
-      await mkdir(hidden)
+      const own = join(hidden, 'work', 'mine')
+      await mkdir(own, { recursive: true })
       await writeFile(join(hidden, 'secret.md'), 'x')
       const { symlink } = await import('node:fs/promises')
       await symlink(hidden, join(root, 'alias'))
-      const guard = privatePathGuard([hidden])
-      expect(guard.check(join(hidden, 'secret.md'), root, false)).toContain('hidden from this role')
-      expect(guard.check('alias/secret.md', root, false)).toContain('hidden from this role')
-      expect(guard.check(root, root, true)).toContain('would traverse')
-      expect(guard.check(root, root, false)).toBeUndefined()
-      expect(guard.check(join(root, 'other'), root, true)).toBeUndefined()
+      const guard = privatePathGuard([hidden], [own])
+      expect(guard.check(join(hidden, 'secret.md'), false)).toContain('hidden from this role')
+      expect(guard.check(join(root, 'alias', 'secret.md'), false)).toContain('hidden from this role')
+      expect(guard.check(join(own, 'file.txt'), false)).toBeUndefined()
+      expect(guard.check(join(hidden, 'work'), true)).toContain('hidden from this role')
+      expect(guard.check(root, true)).toContain('would traverse')
+      expect(guard.check(root, false)).toBeUndefined()
+      expect(guard.check(join(root, 'other'), true)).toBeUndefined()
       expect(guard.checkCommand(`cat ${hidden}/secret.md`)).toBeDefined()
+      expect(guard.checkCommand(`cat ${own}/file.txt`)).toBeUndefined()
       expect(guard.checkCommand('cat README.md')).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -69,7 +73,7 @@ describe.skipIf(!hasBwrap)('bubblewrap sandbox', () => {
       await writeFile(join(cwd, 'app.txt'), 'original')
       resetIsolationCache()
       const decision = await decideIsolation('sandbox')
-      const command = sandboxCommand(decision.bwrap!, { cwd, scratch, hidden: [hidden] }, `
+      const command = sandboxCommand(decision.bwrap!, { cwd, own: cwd, scratch, hidden: [hidden] }, `
         (echo mutated > app.txt) 2>/dev/null && echo WROTE-CANDIDATE
         echo note > "$RSI_SCRATCH/n" && cat "$RSI_SCRATCH/n"
         cat ${hidden}/secret.md 2>/dev/null || echo NO-SECRET
@@ -82,6 +86,35 @@ describe.skipIf(!hasBwrap)('bubblewrap sandbox', () => {
       expect(out).toContain(`scratch=${scratch}`)
       expect(await readFile(join(cwd, 'app.txt'), 'utf8')).toBe('original')
       expect(await readFile(join(scratch, 'n'), 'utf8')).toBe('note\n')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('cannot undo its masks or remount the root, even as root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-rsi-caps-'))
+    try {
+      const cwd = join(root, 'cwd')
+      const scratch = join(root, 'scratch')
+      const hidden = join(root, 'memory')
+      await mkdir(cwd)
+      await mkdir(scratch)
+      await mkdir(hidden)
+      await writeFile(join(hidden, 'secret.md'), 'SECRET')
+      resetIsolationCache()
+      const decision = await decideIsolation('sandbox')
+      const command = sandboxCommand(decision.bwrap!, { cwd, own: cwd, scratch, hidden: [hidden] }, `
+        umount ${hidden} 2>/dev/null; umount -l ${hidden} 2>/dev/null
+        mount -o remount,rw / 2>/dev/null && echo REMOUNTED
+        cat ${hidden}/secret.md 2>/dev/null || echo NO-SECRET
+        (echo x > ${cwd}/x) 2>/dev/null && echo WROTE
+        true
+      `)
+      const out = execFileSync('bash', ['-c', command], { cwd, encoding: 'utf8' })
+      expect(out).toContain('NO-SECRET')
+      expect(out.split('\n')).not.toContain('SECRET')
+      expect(out).not.toContain('REMOUNTED')
+      expect(out).not.toContain('WROTE')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -148,7 +181,7 @@ describe.skipIf(!hasBwrap)('bubblewrap sandbox', () => {
     const probe = actorInputs.find(input => input.includes('No such file') || input.includes('SIBLING-SECRET'))
     expect(probe).toBeDefined()
     expect(probe).not.toContain('SIBLING-SECRET')
-    expect(actorInputs.some(input => input.includes("belongs to another project of this lineage"))).toBe(true)
+    expect(actorInputs.some(input => input.includes("is hidden from this role"))).toBe(true)
   })
 })
 

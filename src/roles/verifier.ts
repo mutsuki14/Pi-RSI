@@ -18,10 +18,11 @@ boundary worked. Paths private to the Actor Agent are masked and appear empty. N
 candidate (no state-changing requests, resets, inserts, or pushes), because those effects cannot be rolled
 back. These mechanics protect the scored state without prescribing your method.`
     : `You have read-only file tools and a shell. The harness checkpoints the candidate before your inspection
-and restores it afterwards, so any effects your commands have on the candidate's files are reverted. Put
-temporary files in your private scratch directory $RSI_SCRATCH, which is discarded when your role ends and
-is never part of the candidate. Never mutate live services, databases, or anything outside the candidate:
-those effects cannot be rolled back.`
+and restores it afterwards: its tracked and untracked files and its repository refs, index, configuration,
+and hooks. Ignored files (build outputs, dependency trees, caches) are NOT restored, so do not change them.
+Put temporary files in your private scratch directory $RSI_SCRATCH, which is discarded when your role ends
+and is never part of the candidate. Never mutate live services, databases, or anything outside the
+candidate: those effects cannot be rolled back.`
 }
 
 /** Verifier system prompt (RSIAgent `AGENTIC_VERIFIER_SYSTEM`), adapted to pi tools. */
@@ -41,8 +42,9 @@ the task.
 
 ${mechanicsText(mechanics)}
 
-The Actor Agent's durable memory, its session logs, and the harness's private state are hidden from you by
-design; do not look for them.
+The Actor Agent's durable memory, its session logs, and the harness's private state are off-limits to you:
+your file tools refuse them${mechanics === 'sandbox' ? ' and your shell sees them masked' : ''}. Do not look for them; they are not
+correctness evidence.
 
 ${EPISTEMIC_CORE}
 

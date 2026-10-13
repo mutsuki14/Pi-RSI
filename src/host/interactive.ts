@@ -5,7 +5,7 @@ import type { Verdict } from '../protocol/tokens.ts'
 import { MemoryConflictError, MemoryFrozenError, MemoryQuarantineError, type MemoryStore } from '../memory/store.ts'
 import { disagreementMessage, distillationMessage, memoryRevisit, reconciliationMessage, unverifiedMessage } from '../roles/actor.ts'
 import { verifierSystem } from '../roles/verifier.ts'
-import { WorkspaceCheckpoint } from './checkpoint.ts'
+import { GitMetadataCheckpoint, WorkspaceCheckpoint } from './checkpoint.ts'
 import { workspaceState } from './git.ts'
 import { roleSettings, type Host } from './host.ts'
 import { memoryReadTools, memoryWriteTools, type MemoryToolHooks } from './memory-tools.ts'
@@ -55,10 +55,11 @@ function requireSingleStateCall(branch: BranchEntry[], fold: BranchFold, toolCal
 export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void {
   const frozen = async (host: Host, store: MemoryStore) => host.config.mode === 'frozen' || (await store.frozen())
 
-  /** The learning draft this session owns, reopened from disk if needed. */
-  const ownedDraft = async (ctx: ExtensionContext, store: MemoryStore) => {
+  /** The learning draft this session owns, reopened from disk if needed; frozen memory never serves a draft. */
+  const ownedDraft = async (ctx: ExtensionContext, host: Host, store: MemoryStore) => {
     const learning = foldBranch(branchOf(ctx)).state.learning
     if (!learning || learning.owner !== sessionIdOf(ctx)) return undefined
+    if (await frozen(host, store)) return undefined
     return store.reopenDraft(learning.episode)
   }
 
@@ -66,14 +67,14 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
     view: async (_tool, ctx) => {
       const host = await hostOf(ctx)
       const store = await host.store()
-      const draft = await ownedDraft(ctx, store)
+      const draft = await ownedDraft(ctx, host, store)
       return draft ? { store, dir: draft.dir, draft } : { store, dir: store.canonicalDir }
     },
     writable: async (tool, ctx) => {
       const host = await hostOf(ctx)
       const store = await host.store()
       if (await frozen(host, store)) throw new Error(`${tool}: memory is frozen for test-time reuse; it cannot change`)
-      const draft = await ownedDraft(ctx, store)
+      const draft = await ownedDraft(ctx, host, store)
       if (draft) return { store, dir: draft.dir, draft }
       const learning = foldBranch(branchOf(ctx)).state.learning
       if (learning && learning.owner !== sessionIdOf(ctx)) throw new Error(`${tool}: the open learning phase belongs to another session; call rsi_learn to open this session's own`)
@@ -88,6 +89,8 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
 
   pi.registerTool({
     name: 'rsi_submit',
+    // The task state lives on the branch as this tool's result details: never callable from other tools.
+    exposure: 'model-only',
     label: 'RSI verification',
     description: 'Submit the current task for independent verification. An isolated Verifier Agent inspects the live result against the user\'s recent messages, verbatim, without seeing your reasoning or memory, and returns PASS, FAIL, or UNVERIFIED with a report. The same Verifier context inspects every revision of one task.',
     promptSnippet: 'Request independent verification of a completed non-trivial task',
@@ -106,8 +109,11 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       const fold = foldBranch(branch)
       requireSingleStateCall(branch, fold, toolCallId, 'rsi_submit')
       const task = fold.state
-      if (task.learning && task.learning.owner === sessionId) throw new Error('a learning phase is open; finish it with rsi_memory_commit before submitting again')
       const store = await host.store()
+      // While memory is frozen no learning phase can finish, so an open one does not block verification.
+      if (task.learning && task.learning.owner === sessionId && !(await frozen(host, store))) {
+        throw new Error('a learning phase is open; finish it with rsi_memory_commit before submitting again')
+      }
       const isolation = await host.isolation()
       const cwd = host.paths.project
       const newTask = task.verdict === 'PASS' && fold.requests > task.requestCount
@@ -117,8 +123,13 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       signal?.throwIfAborted()
       const before = await workspaceState(cwd, excludes)
       let checkpoint: WorkspaceCheckpoint
+      let gitMeta: GitMetadataCheckpoint | undefined
       try {
         checkpoint = await WorkspaceCheckpoint.take(cwd, excludes, { maxBytes: host.config.verifier.checkpointMaxBytes, maxFiles: host.config.verifier.checkpointMaxFiles })
+        gitMeta = await GitMetadataCheckpoint.take(cwd).catch(async error => {
+          await checkpoint.dispose()
+          throw error
+        })
       } catch (error) {
         throw new Error(`the candidate could not be checkpointed (${String(error)}). This is an infrastructure failure, not a verdict.`)
       }
@@ -183,45 +194,64 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       } finally {
         try {
           changed = await checkpoint.restore()
+          if (gitMeta) changed = [...changed, ...(await gitMeta.restore())]
         } finally {
           await checkpoint.dispose()
+          await gitMeta?.dispose()
         }
       }
-      signal?.throwIfAborted()
+      if (signal?.aborted) {
+        await host.closeVerifier(sessionId)
+        signal.throwIfAborted()
+      }
       if (inspection.kind === 'infra') {
         await host.closeVerifier(sessionId)
-        throw new Error(`verification is unavailable: ${inspection.reason}. This is an infrastructure failure, not a verdict.`)
-      }
-      const note = changed.length === 0
-        ? ''
-        : checkpoint.restores
-          ? `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection and were restored: ${changed.slice(0, 20).join(', ')}${changed.length > 20 ? ', …' : ''}`
-          : `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection; the workspace was too large to checkpoint, so inspect them: ${changed.slice(0, 20).join(', ')}`
-      const ref = await store.putReport(inspection.report)
-      const learn = !(await frozen(host, store))
-      const verdict: Verdict = inspection.verdict
-      let guidance: string
-      switch (verdict) {
-        case 'PASS':
-          guidance = `VERDICT: PASS\n\nThe independent Verifier verified the task. Report:\n---\n${inspection.report.trim()}\n---${learn ? '\nNext: call rsi_learn to distill this experience into durable memory.' : ''}`
-          break
-        case 'FAIL':
-          guidance = `VERDICT: FAIL\n\n${disagreementMessage(inspection.report)}\n\n${memoryRevisit('verifier')}${learn ? '\nIf you decide to stop repairing, call rsi_learn: a FAIL still teaches.' : ''}`
-          break
-        case 'UNVERIFIED':
-          guidance = `VERDICT: UNVERIFIED\n\n${unverifiedMessage(inspection.report)}\n\n${memoryRevisit('verifier')}\nThen call rsi_submit again with evidence_leads.`
-          break
-        default: {
-          const unreachable: never = verdict
-          throw new Error(`unknown verdict ${String(unreachable)}`)
+        const snapshot = usage.snapshot()
+        return {
+          content: [{ type: 'text' as const, text: `verification is unavailable: ${inspection.reason}. This is an infrastructure failure, not a verdict.` }],
+          details: undefined,
+          isError: true,
+          ...(snapshot ? { usage: snapshot } : {}),
         }
       }
-      return result(guidance + note, { rsi: 1, op: 'submit', newTask, generation, verdict, requestCount: fold.requests, report: ref, session: sessionId }, usage)
+      try {
+        const note = changed.length === 0
+          ? ''
+          : checkpoint.restores
+            ? `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection and were restored: ${changed.slice(0, 20).join(', ')}${changed.length > 20 ? ', …' : ''}`
+            : `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection; the workspace was too large to checkpoint, so inspect them: ${changed.slice(0, 20).join(', ')}`
+        const ref = await store.putReport(inspection.report)
+        const learn = !(await frozen(host, store))
+        const verdict: Verdict = inspection.verdict
+        let guidance: string
+        switch (verdict) {
+          case 'PASS':
+            guidance = `VERDICT: PASS\n\nThe independent Verifier verified the task. Report:\n---\n${inspection.report.trim()}\n---${learn ? '\nNext: call rsi_learn to distill this experience into durable memory.' : ''}`
+            break
+          case 'FAIL':
+            guidance = `VERDICT: FAIL\n\n${disagreementMessage(inspection.report)}\n\n${memoryRevisit('verifier')}${learn ? '\nIf you decide to stop repairing, call rsi_learn: a FAIL still teaches.' : ''}`
+            break
+          case 'UNVERIFIED':
+            guidance = `VERDICT: UNVERIFIED\n\n${unverifiedMessage(inspection.report)}\n\n${memoryRevisit('verifier')}\nThen call rsi_submit again with evidence_leads.`
+            break
+          default: {
+            const unreachable: never = verdict
+            throw new Error(`unknown verdict ${String(unreachable)}`)
+          }
+        }
+        return result(guidance + note, { rsi: 1, op: 'submit', newTask, generation, verdict, requestCount: fold.requests, report: ref, session: sessionId }, usage)
+      } catch (error) {
+        // The Verifier published a verdict the branch never records: its context must not carry it into the next inspection.
+        await host.closeVerifier(sessionId)
+        throw error
+      }
     },
   })
 
   pi.registerTool({
     name: 'rsi_learn',
+    // The task state lives on the branch as this tool's result details: never callable from other tools.
+    exposure: 'model-only',
     label: 'RSI learn',
     description: 'Open the learning phase after a terminal verdict (PASS, or FAIL when you stop repairing): distill this experience into a memory draft, then rsi_memory_commit.',
     promptSnippet: 'Open the learning phase after a terminal verification verdict',
@@ -250,7 +280,8 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       }
       // The attempt is over: the Verifier context ends before learning starts.
       await host.closeVerifier(sessionId)
-      await store.openDraft(episode)
+      // A draft this branch never opened (another branch's, or a cancelled call's) is not reused.
+      await store.openDraft(episode, { fresh: task.learning?.episode !== episode })
       const last = task.reports.at(-1)
       const report = (last && (await store.getReport(last.sha256))) ?? '(the final report is in your history above)'
       return result(distillationMessage(task.verdict, report, 'actor', store.limits), {
@@ -263,6 +294,8 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
 
   pi.registerTool({
     name: 'rsi_memory_commit',
+    // The task state lives on the branch as this tool's result details: never callable from other tools.
+    exposure: 'model-only',
     label: 'RSI memory commit',
     description: 'Learning phase: the first call asks you to reconcile the whole draft; the second call promotes it atomically to durable memory.',
     promptSnippet: 'Learning phase: reconcile, then promote the memory draft',

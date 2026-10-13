@@ -249,3 +249,92 @@ async function listFiles(root: string, excludes: readonly string[], method: Meth
   await visit(root)
   return { method: 'walk', files, blocked }
 }
+
+const GIT_META_FILES = ['HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'index', 'packed-refs', 'config']
+const GIT_META_DIRS = ['refs', 'hooks']
+
+/**
+ * Repository metadata a rollback-mode inspection could change without
+ * touching the work tree: branch heads and other refs, the index, the
+ * repository configuration, and hooks. A commit, stash, reset, or config edit
+ * by the Verifier is undone by restoring these (new objects stay, unreferenced).
+ * Only a `.git` directory at the candidate root is covered.
+ */
+export class GitMetadataCheckpoint {
+  private constructor(
+    readonly gitDir: string,
+    readonly store: string,
+    readonly files: Map<string, string>,
+  ) {}
+
+  static async take(root: string): Promise<GitMetadataCheckpoint | undefined> {
+    const gitDir = join(root, '.git')
+    const info = await lstat(gitDir).catch(() => undefined)
+    if (!info?.isDirectory()) return undefined
+    const store = await mkdtemp(join(tmpdir(), 'pi-rsi-gitmeta-'))
+    const files = new Map<string, string>()
+    try {
+      for (const rel of await gitMetaFiles(gitDir)) {
+        const data = await readFile(join(gitDir, rel)).catch(() => undefined)
+        if (data === undefined) continue
+        await mkdir(dirname(join(store, rel)), { recursive: true })
+        await copyFile(join(gitDir, rel), join(store, rel))
+        files.set(rel, sha256(data))
+      }
+    } catch (error) {
+      await rm(store, { recursive: true, force: true })
+      throw error
+    }
+    return new GitMetadataCheckpoint(gitDir, store, files)
+  }
+
+  /** Restores changed metadata, removes metadata the inspection created, and returns what changed (as `.git/…`). */
+  async restore(): Promise<string[]> {
+    const changed: string[] = []
+    const now = new Set(await gitMetaFiles(this.gitDir))
+    for (const [rel, digest] of this.files) {
+      const data = await readFile(join(this.gitDir, rel)).catch(() => undefined)
+      if (data !== undefined && sha256(data) === digest) continue
+      changed.push(`.git/${rel}`)
+      try {
+        await mkdir(dirname(join(this.gitDir, rel)), { recursive: true })
+        await copyFile(join(this.store, rel), join(this.gitDir, rel))
+      } catch {
+        // Reported through the changed list.
+      }
+    }
+    for (const rel of now) {
+      if (this.files.has(rel)) continue
+      changed.push(`.git/${rel}`)
+      await rm(join(this.gitDir, rel), { force: true }).catch(() => undefined)
+    }
+    return changed.sort()
+  }
+
+  async dispose(): Promise<void> {
+    await rm(this.store, { recursive: true, force: true })
+  }
+}
+
+async function gitMetaFiles(gitDir: string): Promise<string[]> {
+  const out: string[] = []
+  for (const name of GIT_META_FILES) {
+    const info = await lstat(join(gitDir, name)).catch(() => undefined)
+    if (info?.isFile()) out.push(name)
+  }
+  const visit = async (rel: string): Promise<void> => {
+    let entries
+    try {
+      entries = await readdir(join(gitDir, rel), { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const child = `${rel}/${entry.name}`
+      if (entry.isDirectory()) await visit(child)
+      else if (entry.isFile()) out.push(child)
+    }
+  }
+  for (const dir of GIT_META_DIRS) await visit(dir)
+  return out
+}

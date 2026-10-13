@@ -35,7 +35,7 @@ export async function runProbe(probe: string, options: ProbeOptions): Promise<Pr
   try {
     const sandboxed = options.isolation.mode === 'sandbox' && options.isolation.bwrap !== undefined
     const [file, args] = sandboxed
-      ? [options.isolation.bwrap!, [...sandboxArgs({ cwd: options.cwd, scratch, hidden: options.hidden }), 'bash', '-c', probe]]
+      ? [options.isolation.bwrap!, [...sandboxArgs({ cwd: options.cwd, own: options.cwd, scratch, hidden: options.hidden }), 'bash', '-c', probe]]
       : ['bash', ['-c', probe]]
     return await new Promise<ProbeClassification>(done => {
       let stdout = ''

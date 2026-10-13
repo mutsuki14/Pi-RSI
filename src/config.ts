@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 /**
  * pi-rsi configuration. Sources, later ones winning key by key:
@@ -58,7 +58,7 @@ export interface Config {
     tools: string[]
     checkpointMaxBytes: number
     checkpointMaxFiles: number
-    /** Extra absolute paths hidden from the Verifier, in addition to memory, lineage records, and pi sessions. */
+    /** Extra absolute paths hidden from every role, in addition to the pi agent directory and pi-rsi state. */
     hiddenPaths: string[]
   }
   transport: {
@@ -194,6 +194,7 @@ export function validate(config: Config): Config {
   natural(config.verifier.checkpointMaxBytes, 'verifier.checkpointMaxBytes')
   natural(config.verifier.checkpointMaxFiles, 'verifier.checkpointMaxFiles')
   strings(config.verifier.hiddenPaths, 'verifier.hiddenPaths')
+  for (const path of config.verifier.hiddenPaths) check(isAbsolute(path), `verifier.hiddenPaths entries must be absolute paths (${path})`)
   natural(config.transport.actionlessLimit, 'transport.actionlessLimit', 1)
   natural(config.transport.ceiling, 'transport.ceiling', 1)
   const ex = config.exploration

@@ -105,6 +105,8 @@ export default function piRsi(pi: ExtensionAPI): void {
   })
 
   pi.on('session_tree', async (_event, ctx) => {
+    // The branch changed under the live Verifier: its task, charters, and reports belong to the old branch.
+    await host?.closeVerifier(ctx.sessionManager.getSessionId()).catch(() => undefined)
     await status(ctx).catch(() => undefined)
   })
 
@@ -163,8 +165,10 @@ export default function piRsi(pi: ExtensionAPI): void {
     // Claimed before any await, so two starts can never run side by side.
     const controller = new AbortController()
     const lineage = request.lineage ?? newLineageId(request.phase)
-    const state = { lineage, controller, started: Date.now(), phase: request.phase }
+    const state: NonNullable<Host['exploration']> = { lineage, controller, started: Date.now(), phase: request.phase }
     current.exploration = state
+    let finished!: () => void
+    state.done = new Promise<void>(resolve => { finished = resolve })
     const onAbort = () => controller.abort()
     signal?.addEventListener('abort', onAbort, { once: true })
     if (signal?.aborted) controller.abort()
@@ -205,11 +209,13 @@ export default function piRsi(pi: ExtensionAPI): void {
       signal?.removeEventListener('abort', onAbort)
       await runtime?.closeAll()
       if (current.exploration === state) current.exploration = undefined
+      finished()
     }
   }
 
   pi.registerTool({
     name: 'rsi_explore',
+    exposure: 'model-only',
     label: 'RSI exploration',
     description: 'Run a curriculum-driven exploration lineage that improves durable memory without a user task. phase "broad" (Phase 1): a Curriculum Agent authors waves of practice projects within a search direction; each is attempted by a fresh Actor, judged by a fresh Verifier, and learned in order. phase "deep" (Phase 2): fresh Actors attempt an immutable target; outcomes are learned and the Curriculum chooses focused practice until it is ready or stalls. Blocks until the lineage ends; can take a long time and many model calls.',
     promptSnippet: 'Run a broad or deep self-exploration lineage (long-running)',

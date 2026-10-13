@@ -66,7 +66,7 @@ async function preflight(): Promise<IsolationDecision> {
   try {
     const target = join(outside, 'probe')
     const script = `if touch '${target}' 2>/dev/null; then echo WRITABLE; exit 3; fi; touch "$RSI_SCRATCH/ok" && echo READY`
-    const result = await run(bwrap, [...sandboxArgs({ cwd: outside, scratch, hidden: [] }), 'sh', '-c', script])
+    const result = await run(bwrap, [...sandboxArgs({ cwd: outside, own: outside, scratch, hidden: [] }), 'sh', '-c', script])
     const leaked = await stat(target).then(() => true, () => false)
     const scratchWritable = await stat(join(scratch, 'ok')).then(() => true, () => false)
     if (result.code === 0 && result.stdout.includes('READY') && !leaked && scratchWritable) {
@@ -82,54 +82,58 @@ async function preflight(): Promise<IsolationDecision> {
 
 export interface SandboxSpec {
   cwd: string
-  /** Writable private scratch, mounted at its own path and named by $RSI_SCRATCH and $TMPDIR. */
+  /** Writable private scratch, named by $RSI_SCRATCH and $TMPDIR. */
   scratch: string
   /** Absolute paths masked inside the sandbox (directories become empty, files read as empty). */
   hidden: readonly string[]
+  /** The role's own tree: visible (and, in `visibility` mode, writable) even inside a hidden path. */
+  own: string
   /**
-   * `readonly` (Verifier, probes): the whole filesystem is read-only except the scratch.
-   * `visibility` (lineage Actor and Curriculum): writes go through as usual, but
-   * hidden paths and the rest of the confinement area are masked.
+   * `readonly` (Verifier, probes): the whole filesystem is read-only except the
+   * scratch, in a separate process namespace, without host IPC.
+   * `visibility` (lineage Actor and Curriculum): writes go through as usual,
+   * but hidden paths are masked.
    */
   mode?: 'readonly' | 'visibility'
-  /** Within `area` only `own` stays visible (sibling projects, other lineages). */
-  confine?: { area: string, own: string }
 }
+
+/** Host daemons a read-only Verifier could otherwise ask to write for it. */
+const IPC_SOCKETS = ['/run/docker.sock', '/var/run/docker.sock', '/run/containerd', '/run/dbus', '/run/user', '/run/podman']
+const IPC_ENV = ['DBUS_SESSION_BUS_ADDRESS', 'DOCKER_HOST', 'SSH_AUTH_SOCK', 'GPG_AGENT_INFO', 'XDG_RUNTIME_DIR', 'CONTAINER_HOST']
 
 function mask(args: string[], path: string): void {
   let info
   try {
+    // Masks apply to the physical path: bubblewrap refuses to mount over a symlink.
     info = lstatSync(path)
   } catch {
     return
   }
   if (info.isDirectory()) args.push('--tmpfs', path)
-  else args.push('--ro-bind', '/dev/null', path)
+  else if (info.isFile() || info.isSocket()) args.push('--ro-bind', '/dev/null', path)
 }
 
 /** bubblewrap arguments up to (not including) the command. */
 export function sandboxArgs(spec: SandboxSpec): string[] {
   const readonly = (spec.mode ?? 'readonly') === 'readonly'
   const cwd = physical(spec.cwd)
-  const args = [readonly ? '--ro-bind' : '--bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
+  const own = physical(spec.own)
+  const scratch = physical(spec.scratch)
+  // No capabilities, even when pi runs as root: masks and read-only mounts cannot be undone from inside.
+  const args = [readonly ? '--ro-bind' : '--bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--cap-drop', 'ALL']
   // The Verifier gets its own process namespace; Actors keep background processes across commands.
   if (readonly) args.push('--unshare-pid', '--die-with-parent')
   args.push('--new-session')
-  // A fresh /tmp per command for the Verifier, unless the candidate itself lives there (it must stay visible).
-  if (readonly && !isWithin(cwd, '/tmp') && !isWithin(cwd, physical('/tmp'))) args.push('--tmpfs', '/tmp')
-  for (const path of spec.hidden) {
-    // Never mask the role's own tree (or a parent of it): the role must see it.
-    if (isWithin(cwd, path) || isWithin(cwd, physical(path))) continue
-    mask(args, path)
+  // A fresh /tmp per command for the Verifier, unless its own tree lives there (it must stay visible).
+  if (readonly && !isWithin(own, physical('/tmp')) && !isWithin(cwd, physical('/tmp'))) args.push('--tmpfs', '/tmp')
+  if (readonly) {
+    for (const socket of IPC_SOCKETS) mask(args, socket)
+    for (const name of IPC_ENV) args.push('--unsetenv', name)
   }
-  if (spec.confine) {
-    const area = physical(spec.confine.area)
-    const own = physical(spec.confine.own)
-    if (isWithin(own, area) && lstatSync(area, { throwIfNoEntry: false })?.isDirectory()) {
-      args.push('--tmpfs', area, readonly ? '--ro-bind' : '--bind', own, own)
-    }
-  }
-  const scratch = physical(spec.scratch)
+  for (const path of new Set(spec.hidden.map(physical))) mask(args, path)
+  // Re-expose what the role must reach: its own tree and its scratch (bind sources resolve outside the masks).
+  args.push(readonly ? '--ro-bind' : '--bind', own, own)
+  if (!isWithin(cwd, own)) args.push(readonly ? '--ro-bind' : '--bind', cwd, cwd)
   args.push('--bind', scratch, scratch, '--setenv', 'RSI_SCRATCH', scratch, '--setenv', 'TMPDIR', scratch, '--chdir', spec.cwd)
   return args
 }
@@ -168,41 +172,34 @@ export function physical(path: string): string {
 }
 
 export interface PathGuard {
-  /** A reason to refuse, or undefined to allow. `recursive` also refuses ancestors of hidden paths. */
-  check(path: string, cwd: string, recursive: boolean): string | undefined
-  /** A reason to refuse a shell command that names a hidden path. */
+  /** A reason to refuse access to an absolute path, or undefined to allow. `recursive` also refuses ancestors of hidden paths. */
+  check(absolutePath: string, recursive: boolean): string | undefined
+  /** A reason to refuse a shell command that names a hidden path (a tripwire, not a boundary). */
   checkCommand(command: string): string | undefined
 }
 
 /**
- * Refuses paths a role must not see (resolved physically, as the filesystem
- * would): harness-private paths, and inside a confinement area everything but
- * the role's own tree.
+ * What a role may not see: everything inside a hidden root, except its own
+ * tree and its scratch. Paths are resolved physically, as the filesystem
+ * would, so a symlink into a hidden root is refused too.
  */
-export function privatePathGuard(hidden: readonly string[], confine?: { area: string, own: string }): PathGuard {
+export function privatePathGuard(hidden: readonly string[], allowed: readonly string[]): PathGuard {
   const roots = [...new Set(hidden.flatMap(path => [resolve(path), physical(path)]))]
-  const area = confine ? physical(confine.area) : undefined
-  const own = confine ? physical(confine.own) : undefined
+  const open = [...new Set(allowed.flatMap(path => [resolve(path), physical(path)]))]
   return {
-    check(path, cwd, recursive) {
-      const target = physical(isAbsolute(path) ? path : resolve(cwd, path))
+    check(absolutePath, recursive) {
+      const target = physical(absolutePath)
+      if (open.some(root => isWithin(target, root))) return undefined
       for (const root of roots) {
-        if (isWithin(target, root)) return `${path} is private to the harness and hidden from this role`
-        if (recursive && isWithin(root, target)) return `searching ${path} would traverse paths hidden from this role; search inside your own tree instead`
-      }
-      if (area && own && !isWithin(target, own)) {
-        if (isWithin(target, area)) return `${path} belongs to another project of this lineage and is hidden from this role`
-        if (recursive && isWithin(area, target)) return `searching ${path} would traverse other projects of this lineage; search inside your own tree instead`
+        if (isWithin(target, root)) return `${absolutePath} is hidden from this role`
+        if (recursive && isWithin(root, target)) return `searching ${absolutePath} would traverse paths hidden from this role; search inside your own tree instead`
       }
       return undefined
     },
     checkCommand(command) {
-      for (const root of roots) if (command.includes(root)) return 'the command names a path hidden from this role'
-      if (area && own) {
-        // Any mention of the area that is not a mention of the role's own tree.
-        const stripped = command.split(own).join('')
-        if (stripped.includes(area)) return 'the command names another project of this lineage, which is hidden from this role'
-      }
+      let rest = command
+      for (const root of open) rest = rest.split(root).join('')
+      for (const root of roots) if (rest.includes(root)) return 'the command names a path hidden from this role'
       return undefined
     },
   }

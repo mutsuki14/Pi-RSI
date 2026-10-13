@@ -117,4 +117,41 @@ describe('interactive Actor protocol', () => {
     expect(verifierCalls.at(-1)!.input).toContain('This is candidate generation 2')
     expect(verifierCalls[1]!.input).toContain('Tool write not found')
   })
+
+  it('guards the paths pi actually opens, including @-prefixed ones', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } } })
+    const h = harness
+    h.script('main', [call('rsi_submit'), say('ok')])
+    h.script('verifier', [
+      () => call('read', { path: `@${h.agentDir}/rsi.json` }),
+      () => call('ls', { path: h.agentDir }),
+      () => call('find', { pattern: '*.json', path: h.root }),
+      say('VERDICT: PASS'),
+    ])
+    await h.session.prompt('Check things.')
+    const inputs = h.calls.filter(entry => entry.role === 'verifier').map(entry => entry.input)
+    expect(inputs[1]).toContain('is hidden from this role')
+    expect(inputs[2]).toMatch(/hidden from this role|Path not found/)
+    expect(inputs[3]).toContain('would traverse paths hidden from this role')
+  })
+
+  it('undoes a rollback-mode Verifier commit, stash, or config edit', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } }, files: { 'app.txt': 'v1\n' } })
+    const h = harness
+    const { execFileSync } = await import('node:child_process')
+    const head = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: h.project, encoding: 'utf8' }).trim()
+    const before = head()
+    h.script('main', [call('rsi_submit'), say('ok')])
+    h.script('verifier', [
+      call('bash', { command: 'echo v2 > app.txt && git -c user.email=v@v -c user.name=v commit -qam probe && git config core.pirsi probe && echo committed' }),
+      say('VERDICT: PASS'),
+    ])
+    await h.session.prompt('Keep the repository as it is.')
+    const [result] = toolResults(h.session)
+    expect(h.calls.filter(entry => entry.role === 'verifier')[1]!.input).toContain('committed')
+    expect(result!.text).toContain('.git/config')
+    expect(head()).toBe(before)
+    expect(await readFile(join(h.project, 'app.txt'), 'utf8')).toBe('v1\n')
+    expect(() => execFileSync('git', ['config', 'core.pirsi'], { cwd: h.project })).toThrow()
+  })
 })

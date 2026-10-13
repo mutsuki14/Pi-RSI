@@ -34,7 +34,7 @@ export class Host {
   readonly stores: StoreRegistry
   readonly verifiers = new Map<string, LiveVerifier>()
   /** The exploration lineage running in this process, if any (one at a time per project). */
-  exploration: { lineage: string, controller: AbortController, started: number, phase: string, last?: string } | undefined
+  exploration: { lineage: string, controller: AbortController, started: number, phase: string, last?: string, done?: Promise<unknown> } | undefined
   #store: Promise<MemoryStore> | undefined
   #isolation: Promise<IsolationDecision> | undefined
   #modelRuntime: Promise<ModelRuntime> | undefined
@@ -77,14 +77,18 @@ export class Host {
     await this.stores.refresh(await this.store())
   }
 
-  /** Paths the Verifier must never see: Actor memory, lineage records, pi sessions, credentials. */
+  /**
+   * Paths no role may see, except its own tree and scratch: the whole pi agent
+   * directory (sessions, credentials, settings, every project's pi-rsi state),
+   * this project's pi-rsi state and memory wherever they are configured, the
+   * session directory, and any configured extras.
+   */
   hiddenPaths(ctx: ExtensionContext): string[] {
     const sessionDir = ctx.sessionManager.getSessionDir?.()
     return [...new Set([
+      this.agentDir,
+      this.paths.state,
       this.paths.memory,
-      this.paths.lineages,
-      join(this.agentDir, 'sessions'),
-      join(this.agentDir, 'auth.json'),
       ...(sessionDir ? [sessionDir] : []),
       ...this.config.verifier.hiddenPaths,
     ])]
@@ -185,8 +189,15 @@ export class Host {
     await live.runtime.closeAll()
   }
 
-  async dispose(): Promise<void> {
-    this.exploration?.controller.abort()
+  /** Aborts a running lineage and waits (bounded) for it to record its end, then closes live Verifiers. */
+  async dispose(waitMs = 10_000): Promise<void> {
+    const running = this.exploration
+    running?.controller.abort()
+    if (running?.done) {
+      let timer: NodeJS.Timeout | undefined
+      await Promise.race([running.done.catch(() => undefined), new Promise(done => { timer = setTimeout(done, waitMs) })])
+      clearTimeout(timer)
+    }
     await Promise.allSettled([...this.verifiers.keys()].map(id => this.closeVerifier(id)))
   }
 }
