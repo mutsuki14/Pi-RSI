@@ -3,7 +3,7 @@ import { appendFile, cp, lstat, mkdir, open, readdir, readFile, rename, rm, stat
 import { hostname } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import type { LeakageAudit } from './audit.ts'
-import { sha256, treeSha256, type TreeHashes } from './hash.ts'
+import { compareCodePoints, sha256, treeSha256, type TreeHashes } from './hash.ts'
 import { safeRelativePath } from './paths.ts'
 
 export interface MemoryLimits {
@@ -81,17 +81,18 @@ export function diffManifests(before: Manifest, after: Manifest): MemoryDelta {
   const created: string[] = []
   const modified: string[] = []
   const deleted: string[] = []
+  // Own properties only: a memory file may be named `constructor` or `__proto__`.
   for (const [path, entry] of Object.entries(after)) {
-    const prior = before[path]
+    const prior = Object.hasOwn(before, path) ? before[path] : undefined
     if (prior === undefined) created.push(path)
     else if (prior.sha256 !== entry.sha256) modified.push(path)
   }
-  for (const path of Object.keys(before)) if (after[path] === undefined) deleted.push(path)
+  for (const path of Object.keys(before)) if (!Object.hasOwn(after, path)) deleted.push(path)
   return { created: created.sort(), modified: modified.sort(), deleted: deleted.sort() }
 }
 
 export function manifestHash(manifest: Manifest): string {
-  const hashes: TreeHashes = {}
+  const hashes: TreeHashes = Object.create(null) as TreeHashes
   for (const [path, entry] of Object.entries(manifest)) hashes[path] = entry.sha256
   return treeSha256(hashes)
 }
@@ -134,8 +135,9 @@ async function walk(root: string): Promise<Map<string, Buffer>> {
 }
 
 function manifestOf(files: ReadonlyMap<string, Buffer>): Manifest {
-  const manifest: Manifest = {}
-  for (const [path, data] of [...files].sort(([a], [b]) => (a < b ? -1 : 1))) {
+  // No prototype: a file named `__proto__` is an ordinary key.
+  const manifest: Manifest = Object.create(null) as Manifest
+  for (const [path, data] of [...files].sort(([a], [b]) => compareCodePoints(a, b))) {
     manifest[path] = { bytes: data.byteLength, sha256: sha256(data) }
   }
   return manifest

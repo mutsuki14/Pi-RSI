@@ -159,6 +159,8 @@ export interface BranchFold {
   requestTexts: string[]
   /** HEAD commit recorded when the current task's first user message arrived, if any. */
   taskBaseline: string | undefined
+  /** Index into `requestTexts` of the current task's first user message. */
+  taskStart: number
 }
 
 /** Custom entry pi-rsi appends before every user prompt: the project's HEAD commit at that moment. */
@@ -180,6 +182,7 @@ export function foldBranch(entries: readonly BranchEntry[]): BranchFold {
   // promoted commit, or at a new user message after a PASS (the next submission is a new task).
   let lastBaseline: string | undefined
   let taskBaseline: string | undefined
+  let taskStart = 0
   let startsTask = true
   for (const entry of entries) {
     if (entry.type === 'custom' && entry.customType === BASELINE_ENTRY) {
@@ -193,6 +196,7 @@ export function foldBranch(entries: readonly BranchEntry[]): BranchFold {
       requests++
       if (startsTask || (state.verdict === 'PASS' && requests > state.requestCount)) {
         taskBaseline = lastBaseline
+        taskStart = requestTexts.length
         startsTask = false
       }
       const body = userText(message.content).trim()
@@ -210,7 +214,7 @@ export function foldBranch(entries: readonly BranchEntry[]): BranchFold {
     state = settle(state, entry.id, meta, (message.toolCallId && stepOf.get(message.toolCallId)) ?? null)
     if (meta.op === 'commit') startsTask = true
   }
-  return { state, requests, stepOf, requestTexts, taskBaseline }
+  return { state, requests, stepOf, requestTexts, taskBaseline, taskStart }
 }
 
 /** State-tool calls of one assistant message (to refuse batching them). */

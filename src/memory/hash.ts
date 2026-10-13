@@ -9,11 +9,22 @@ export function sha256(data: string | Uint8Array): string {
   return createHash('sha256').update(data).digest('hex')
 }
 
+/** Orders strings by Unicode code point, as Python sorts `str` (JavaScript's `<` compares UTF-16 code units). */
+export function compareCodePoints(a: string, b: string): number {
+  const left = Array.from(a)
+  const right = Array.from(b)
+  for (let index = 0; index < Math.min(left.length, right.length); index++) {
+    const diff = left[index]!.codePointAt(0)! - right[index]!.codePointAt(0)!
+    if (diff !== 0) return diff
+  }
+  return left.length - right.length
+}
+
 /** Canonical JSON: sorted keys, no insignificant whitespace (matches Python `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`). */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => compareCodePoints(a, b))
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`
   }
   return JSON.stringify(value)

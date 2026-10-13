@@ -70,6 +70,12 @@ export class InfraError extends Error {}
 export class TransportInfraError extends InfraError {}
 
 /**
+ * Infrastructure after the Verifier has published a report: the branch is not
+ * restarted (RSIAgent restarts only physical failures before the first report).
+ */
+export class LateInfraError extends InfraError {}
+
+/**
  * RSIAgent's transport rule: no fixed retry count; consecutive actionless
  * segments end the context as infrastructure, and a large ceiling bounds cost.
  */

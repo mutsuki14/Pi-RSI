@@ -291,10 +291,12 @@ establish why your approach succeeded or failed. Make causal claims only when yo
 support them, and preserve uncertainty where they do not.
 
 Update durable memory with rsi_memory_write and rsi_memory_delete (rsi_memory_list, rsi_memory_read and
-rsi_memory_search show the draft) in whatever way will make a fresh future agent more capable in this
-environment: procedures, reusable scripts, environment facts, failure lessons. You may add, revise,
-reorganize, delete, or leave memory unchanged. You own the content, representation, and scope; ${limitsSentence(limits)}. A FAIL may still contain valuable evidence, but must not be
-recorded as a verified success. Do not continue changing the task for credit. Never store secrets.
+rsi_memory_search show the draft) in whatever way you judge will make a fresh future Actor Agent more
+capable. You may investigate remaining questions if the available project state makes that useful, and you
+may add, revise, reorganize, delete, or leave memory unchanged. You own the content, representation,
+retrieval strategy, scope, and stopping decision; ${limitsSentence(limits)}. A FAIL may still contain valuable
+evidence, but must not be recorded as a verified success. Do not continue changing the task for credit.
+Never store secrets.
 ${promotion === 'actor' ? 'Call rsi_memory_commit when the draft is ready.' : 'When the draft is ready, end your turn with a short final reply saying so.'}`
 }
 

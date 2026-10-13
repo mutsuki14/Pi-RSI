@@ -174,7 +174,9 @@ pi-rsi reads `~/.pi/agent/rsi.json`, then `<project>/.pi/rsi.json` when the proj
 - **Tool-using roles, not one-program-per-turn.** RSIAgent's Actor emits one Python/Bash program, look, or `done` per turn inside a VM; pi roles use pi's tools and hand off with their final reply. The handoff tokens (`STATUS: SUBMIT`, `VERDICT:`, `DECISION:`, the wave JSON envelope) and the transport rules are RSIAgent's.
 - **Processes, not VMs.** Fresh roles get fresh sessions and fresh project roots, not fresh machines. bubblewrap masks private paths and sibling projects and makes the Verifier read-only, but network, other processes outside the sandbox, and anything the main pi agent can reach are shared. Run pi in a container for stronger isolation.
 - **Evidence probes** run once on the host (read-only in the sandbox, under the checkpoint otherwise) rather than as the Actor's validated `done` checks.
-- **A stalled Phase 2 practice project** (repeated UNVERIFIED or an actionless Actor) ends the lineage as infrastructure, as in RSIAgent; memory committed by earlier experiences stays.
+- **A stalled Phase 2 practice project** (repeated UNVERIFIED or an actionless Actor) ends the lineage as infrastructure, as in RSIAgent; memory committed by earlier experiences stays. A branch is restarted only for runtime trouble before its Verifier's first report.
+- **Phase 2 has budgets** (`deepPracticeBudget` 6, `targetCycleBudget` 6 by default) that RSIAgent does not have; raise them for long lineages. The mandatory fresh target test after practice still runs when the practice budget is spent.
+- **Memory re-offers** follow RSIAgent's `_memory_revisit` after Verifier feedback, after a compaction, and when a session resumes; the `stagnation` trigger (repeated low-information actions) is not implemented.
 - **Lineages are not resumable** after a restart; interactive learning phases are.
 - **Forks**: a verdict is learned once across a session and its forks; the first promotion wins.
 

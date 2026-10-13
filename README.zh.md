@@ -135,7 +135,9 @@ pi-rsi 读取 `~/.pi/agent/rsi.json`，项目受信任时再读取 `<project>/.p
 - **角色使用工具，而不是每轮一个程序。** RSIAgent 的 Actor 在虚拟机中每轮输出一个 Python/Bash 程序、一次观察或 `done`；pi 的角色使用 pi 的工具，并以最后一条回复完成交接。交接令牌（`STATUS: SUBMIT`、`VERDICT:`、`DECISION:`、波次 JSON 信封）与传输规则沿用 RSIAgent。
 - **进程而不是虚拟机。** 新角色获得新会话和新项目根目录，但不是新机器。bubblewrap 能遮蔽私有路径与兄弟项目，并让 Verifier 只读，但网络、沙箱之外的其他进程以及主 pi 代理能接触到的一切仍然共享。需要更强隔离时，请在容器中运行 pi。
 - **证据探针**由宿主运行一次（沙箱中只读，否则在快照保护下），而不是作为 Actor 已验证的 `done` 检查。
-- **Phase 2 中停滞的练习项目**（反复 UNVERIFIED 或 Actor 无动作）会让谱系以基础设施问题结束，与 RSIAgent 一致；此前经验已提交的记忆会保留。
+- **Phase 2 中停滞的练习项目**（反复 UNVERIFIED 或 Actor 无动作）会让谱系以基础设施问题结束，与 RSIAgent 一致；此前经验已提交的记忆会保留。只有在 Verifier 发布第一份报告之前发生的运行故障才会让分支重来。
+- **Phase 2 有预算上限**（默认 `deepPracticeBudget` 6、`targetCycleBudget` 6），RSIAgent 没有；长谱系请调高。练习预算用尽后，必须进行的全新目标测试仍会执行。
+- **记忆再提示**沿用 RSIAgent 的 `_memory_revisit`：在 Verifier 反馈之后、上下文压缩之后、会话恢复时触发；`stagnation`（重复低信息动作）触发器未实现。
 - **谱系在重启后不可恢复**；交互式学习阶段可以恢复。
 - **分叉**：一个裁决在会话及其分叉之间只学习一次，先提升者生效。
 

@@ -335,7 +335,8 @@ describe('runDeepExploration', () => {
         if (options.route !== 'actor') return 'still unclear\nVERDICT: UNVERIFIED'
         // The swapped-in Verifier is told it takes over, and sees the earlier context's reports.
         expect(message).toContain('You are a fresh Verifier context on a different model')
-        expect(message).toContain('PUBLISHED REPORTS OF THE EARLIER VERIFIER CONTEXT')
+        // RSIAgent's escalated Verifier starts in its own session: no earlier reports are imported.
+        expect(message).not.toContain('PUBLISHED REPORTS OF THE EARLIER VERIFIER CONTEXT')
         return 'VERDICT: PASS'
       },
     })
@@ -526,5 +527,31 @@ describe('engine regressions', () => {
       if (options.role === 'curriculum') expect(options.visible?.own).toBe(join(ws, 'curriculum'))
       else expect(options.visible?.own).toBe(join(ws, 'wave-001', 'only'))
     }
+  })
+
+  it('does not re-roll a practice whose Verifier already published a report', async () => {
+    let practiceActorOpens = 0
+    const runtime = new FakeRuntime({
+      curriculum: async message => {
+        await fixture(fixtureRootOf(message), { 'in.txt': 'x' })
+        return 'DECISION: PROJECT\nIn <PROJECT_ROOT> practice.'
+      },
+      actor: async (message, options, turn) => {
+        if (turn === 0) {
+          if (options.label.includes('p001')) practiceActorOpens++
+          await writeFile(join(options.cwd, 'out'), 'o')
+          return 'STATUS: SUBMIT'
+        }
+        if (message.includes('could not CONFIRM')) return 'STATUS: SUBMIT\nCLAIM: out exists\nPROBE: test -f out && echo PASS'
+        return message.includes('LEARNING DIAGNOSIS') ? 'diagnosis' : 'ok'
+      },
+      verifier: (_message, options, turn) => {
+        if (options.label.includes('target#')) return 'VERDICT: FAIL'
+        // The practice Verifier reports once, then its context dies without another verdict.
+        return turn === 0 ? 'unclear\nVERDICT: UNVERIFIED' : { text: 'no verdict', actions: 0 }
+      },
+    })
+    await expect(runDeepExploration(deps(runtime), { lineage: 'late', target: 'In <PROJECT_ROOT> do it.', paths: paths('late') })).rejects.toThrow('consecutive actionless segments')
+    expect(practiceActorOpens).toBe(1)
   })
 })

@@ -125,6 +125,8 @@ export const DEEP_DECISIONS = ['PROJECT', 'READY_FOR_TARGET', 'STALLED'] as cons
 export type DeepDecision = typeof DEEP_DECISIONS[number]
 
 export interface DeepCharterInput {
+  /** Whether the Curriculum may read Actor memory (RSIAgent `curriculum_memory_access`). */
+  memoryAccess?: CurriculumMemoryAccess
   target: string
   history: string
   latestOutcome: string
@@ -158,10 +160,20 @@ ${input.latestOutcome.trim() || '(no project outcome yet)'}
 
 ${notesBlock(input.notes)}
 
+Use the target outcome, ${input.memoryAccess === 'none' ? 'the Actor learning diagnosis' : 'the Actor-owned durable memory'}, and every later practice outcome to decide which
+experience has greatest expected learning or information value. After PASS, do not create practice by
+default: choose PROJECT only when a contrast or stress case can test an important uncertain or
+overgeneralized hypothesis. After FAIL, prefer practice that discriminates among plausible capability gaps.
+You choose the next experience, not memory wording and not target correctness.
+
 Choose the next learning experience. For PROJECT, choose a prerequisite, variant, contrast, or stress case that
-can be expressed entirely beneath ${PROJECT_ROOT_PLACEHOLDER}; do not reproduce the unchanged target. The
-Actor Agent will try to produce it and the Verifier Agent will discover how to verify it. Do not preflight a
-project by secretly producing its solution.
+can be expressed entirely beneath ${PROJECT_ROOT_PLACEHOLDER}; do not reproduce the unchanged target. Preserve
+the target's literal requirements when choosing a learning project; do not weaken or silently add requirements
+concerning a named application, editable state, behavior, rendered output, interface, workflow, or
+provenance. Do not prescribe or advertise an implementation channel or backend unless that interface or
+workflow is itself the capability being tested. State what must be true; the Actor Agent discovers how to
+achieve it and the Verifier Agent discovers how to verify it. Do not preflight a project by secretly producing
+its solution.
 
 ${curriculumRuntimeContract(input.fixtureRoot)}
 

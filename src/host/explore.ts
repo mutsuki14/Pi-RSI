@@ -35,7 +35,8 @@ export function engineConfig(config: Config, isolation: IsolationDecision, cross
     unverifiedRounds: ex.unverifiedRounds,
     targetResumes: ex.targetResumes,
     branchRetries: ex.branchRetries,
-    inventoryListed: config.promptInventory,
+    // Lineage charters list the complete inventory, as RSIAgent does; the store caps its size.
+    inventoryListed: config.memory.maxFiles,
     stopPolicy: ex.stopPolicy,
     curriculumMemoryAccess: ex.curriculumMemoryAccess,
     transport: config.transport,

@@ -29,6 +29,7 @@ import { captureTree, moveAside, removeView, replayTree, shapeGate, stageReadOnl
 import { formatLeads, inspect, leadsProblem, learn, parseLeads, runHandoffPhase, type Lead, type LeadClassification } from './steps.ts'
 import {
   InfraError,
+  LateInfraError,
   TransportInfraError,
   type EngineObserver,
   type MemoryBinding,
@@ -397,6 +398,12 @@ async function runProject(lineage: Lineage, project: WaveProject, options: Proje
         })
         leads = parseLeads(handoff)
       }
+    } catch (error) {
+      // Once the Verifier has published a report, runtime trouble ends the branch instead of re-rolling it.
+      if (reports.length > 0 && error instanceof InfraError && !(error instanceof TransportInfraError) && !(error instanceof LateInfraError)) {
+        throw new LateInfraError(error.message)
+      }
+      throw error
     } finally {
       await verifier.close()
       if (view) await removeView(view)
@@ -413,7 +420,7 @@ async function runProjectWithRetry(lineage: Lineage, project: WaveProject, optio
       return await runProject(lineage, project, options)
     } catch (error) {
       // Only runtime infrastructure before a verdict restarts a branch; transport exhaustion is the role's own outcome.
-      if (!(error instanceof InfraError) || error instanceof TransportInfraError || attempt >= lineage.deps.config.branchRetries) throw error
+      if (!(error instanceof InfraError) || error instanceof TransportInfraError || error instanceof LateInfraError || attempt >= lineage.deps.config.branchRetries) throw error
       const moved = await moveAside(join(options.episodeDir, 'project'), join(options.episodeDir, 'infra_attempts'))
       await lineage.event('PROJECT_RESTARTED_UNSCORED', { project: project.id, reason: error.message, preserved: moved })
     }
@@ -644,7 +651,8 @@ async function runTargetAttempt(lineage: Lineage, cycle: number, target: string,
             swapped = true
             await verifier.close()
             verifier = await lineage.open('verifier', `target#${cycle} verifier (cross-model)`, verifierSystem(true, config.verifierMechanics), root, { access: 'none' }, cycleDir, 'actor')
-            handover = { priorReports: [...reports] }
+            // RSIAgent starts the escalated Verifier in its own session: the earlier Verifier's history is not imported.
+            handover = { priorReports: [] }
           }
           const log = worklog.join('\n\n')
           opening = targetActorCharter(target, root, await store.inventory(), config.inventoryListed, changed ? resumeHandoffMessage(log) : resumePivotMessage(log))
@@ -748,7 +756,7 @@ export async function runDeepExploration(
         await mkdir(fixtureRoot, { recursive: true })
         const decision = await converse(
           curriculum,
-          deepCharter({ target: input.target, history: history.join('\n'), latestOutcome, fixtureRoot, notes: await lineage.notes() }),
+          deepCharter({ memoryAccess: config.curriculumMemoryAccess, target: input.target, history: history.join('\n'), latestOutcome, fixtureRoot, notes: await lineage.notes() }),
           async reply => {
             const parsed = parseDecision<DeepDecision>(reply.text, DEEP_DECISIONS)
             if (!parsed) return { ok: false, detail: 'the first non-empty line must be DECISION: PROJECT, DECISION: READY_FOR_TARGET, or DECISION: STALLED' }

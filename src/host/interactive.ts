@@ -35,9 +35,10 @@ function sessionIdOf(ctx: ExtensionContext): string {
   return ctx.sessionManager.getSessionId()
 }
 
-/** The authoritative task: the latest user messages on this branch, verbatim. */
+/** The authoritative task: the latest user messages of the current task on this branch, verbatim. */
 function authoritativeTask(fold: BranchFold, count: number): string {
-  const recent = fold.requestTexts.slice(-count)
+  // Never older than the task's first message: a finished task's requests are not this task's requirements.
+  const recent = fold.requestTexts.slice(Math.max(fold.taskStart, fold.requestTexts.length - count))
   if (recent.length === 0) return '(no user request was found in this session)'
   if (recent.length === 1) return recent[0]!
   return recent.map((request, index) => `[user message ${index + 1} of ${recent.length}${index === recent.length - 1 ? ', latest' : ''}]\n${request}`).join('\n\n')

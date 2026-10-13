@@ -1,5 +1,6 @@
 import { lstat, readFile, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { ConfigError, loadConfig, type LoadedConfig } from './config.ts'
@@ -9,7 +10,7 @@ import { describeEvent, newLineageId, runExploration, validateRequest, type Expl
 import { Host, roleSettings, snapshotModels } from './host/host.ts'
 import { registerInteractive } from './host/interactive.ts'
 import type { PiRoleRuntime, ThinkingLevel } from './host/role-runtime.ts'
-import { physical } from './host/sandbox.ts'
+import { isWithin, physical } from './host/sandbox.ts'
 import { runSealedEvaluation } from './host/sealed.ts'
 import { BASELINE_ENTRY, foldBranch, type BranchEntry } from './host/task-state.ts'
 import { headCommit } from './host/git.ts'
@@ -159,6 +160,23 @@ export default function piRsi(pi: ExtensionAPI): void {
   })
 
   registerInteractive({ pi, host: activeHost })
+
+  // The main Actor changes durable memory only through a learning phase: a tripwire for direct edits.
+  pi.on('tool_call', async (event, ctx) => {
+    if (!host || host.config.mode === 'off') return undefined
+    const input = event.input as Record<string, unknown>
+    const store = host.paths.memory
+    const named = (value: unknown) => {
+      if (typeof value !== 'string' || value === '') return false
+      const path = value.replace(/^@/, '').replace(/^~(?=$|\/)/, homedir())
+      const full = physical(isAbsolute(path) ? path : join(ctx.cwd, path))
+      return isWithin(full, physical(store))
+    }
+    const direct = (event.toolName === 'write' || event.toolName === 'edit') && named(input.path)
+    const shell = event.toolName === 'bash' && typeof input.command === 'string' && (input.command.includes(store) || input.command.includes(physical(store)))
+    if (!direct && !shell) return undefined
+    return { block: true, reason: 'durable memory changes only in a learning phase, through rsi_learn, rsi_memory_write / rsi_memory_delete, and rsi_memory_commit' }
+  })
 
   // ---------------------------------------------------------------- exploration
   const runLineage = async (ctx: ExtensionContext, request: ExploreRequest, signal: AbortSignal | undefined, progress: (line: string) => void) => {

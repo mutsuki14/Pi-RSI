@@ -82,8 +82,8 @@ export function verifierCharter(input: VerifierCharterInput): string {
     ? 'This is candidate generation 1.'
     : input.handover === 'other-verifier'
       ? `This is candidate generation ${input.generation}. You are a fresh Verifier context on a different model:
-earlier generations were inspected by another Verifier context. Inspect the current live candidate
-independently; earlier reports, when shown, are evidence to check, not conclusions to inherit.`
+earlier generations were inspected by another Verifier context, whose conclusions you do not inherit.
+Inspect the current live candidate independently.`
       : `This is candidate generation ${input.generation}. Your context persists while the Actor revises the
 candidate after a FAIL or UNVERIFIED. Each inspection concerns the current live candidate, so prior evidence
 remains useful but does not prove that a later revision is correct.`

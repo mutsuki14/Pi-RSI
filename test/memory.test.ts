@@ -391,3 +391,26 @@ describe('MemoryStore reads', () => {
     }
   })
 })
+
+describe('tree hashing edge cases', () => {
+  it('treats __proto__ and constructor as ordinary memory names and sorts keys by code point', async () => {
+    const { canonicalJson } = await import('../src/memory/hash.ts')
+    const { diffManifests } = await import('../src/memory/store.ts')
+    // Python sorts by code point: U+FFFD < U+1F600, while UTF-16 code units order them the other way round.
+    expect(canonicalJson({ '\u{1F600}': 1, '�': 2 })).toBe('{"�":2,"\u{1F600}":1}')
+    const root = await mkdtemp(join(tmpdir(), 'pi-rsi-proto-'))
+    try {
+      const store = new MemoryStore(root, { maxFiles: 10, maxTotalBytes: 10_000, maxFileBytes: 1000 }, { keepHistory: false })
+      await store.init()
+      await writeFile(join(store.canonicalDir, '__proto__'), 'p')
+      await writeFile(join(store.canonicalDir, 'constructor'), 'c')
+      expect((await store.inventory()).map(entry => entry.path).sort()).toEqual(['__proto__', 'constructor'])
+      const after = await store.manifest()
+      const delta = diffManifests(Object.create(null), after)
+      expect(delta.created).toEqual(['__proto__', 'constructor'])
+      expect(diffManifests(after, Object.create(null)).deleted).toEqual(['__proto__', 'constructor'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})

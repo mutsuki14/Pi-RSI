@@ -95,10 +95,10 @@ export function memoryWriteTools(hooks: MemoryToolHooks): ToolDefinition<any, an
   const write: ToolDefinition<any, any> = {
     name: 'rsi_memory_write',
     label: 'RSI memory write',
-    description: 'Learning phase only: create or replace one memory file in the draft (procedures, reusable scripts, environment facts, failure lessons). Never store secrets.',
+    description: 'Learning phase only: create or replace one memory file in the draft. You choose the files, names, and organization. Never store secrets.',
     promptSnippet: 'Learning phase only: write one memory file into the draft',
     parameters: Type.Object({
-      path: Type.String({ description: 'Relative memory path, e.g. procedures/build.md or scripts/check.sh.' }),
+      path: Type.String({ description: 'Relative memory path (any name and subdirectories you choose).' }),
       content: Type.String({ description: 'Complete UTF-8 file content.' }),
     }),
     executionMode: 'sequential',
