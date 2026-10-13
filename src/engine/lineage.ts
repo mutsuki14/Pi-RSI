@@ -172,6 +172,7 @@ class Lineage {
   }
 
   async init(meta: Record<string, unknown>): Promise<void> {
+    const integrity = await this.deps.store.integrity()
     // Episode ids derive from the lineage id; a reused id would make the store treat new learning as already promoted.
     if (await lstat(join(this.priv, 'lineage.json')).then(() => true, () => false)) {
       throw new Error(`lineage ${this.id} already exists; choose a new lineage id`)
@@ -184,6 +185,7 @@ class Lineage {
     await mkdir(this.ws, { recursive: true })
     await mkdir(this.priv, { recursive: true })
     await writeFile(join(this.priv, 'lineage.json'), `${JSON.stringify({ id: this.id, ...meta, workspace: this.ws, startedAt: new Date().toISOString() }, null, 2)}\n`)
+    if (!integrity.consistent) await this.event('MEMORY_CHANGED_OUTSIDE_LEARNING', { canonical: integrity.canonical, recorded: integrity.recorded })
   }
 
   async event(type: string, data: Record<string, unknown> = {}): Promise<void> {
@@ -393,7 +395,8 @@ async function runProject(lineage: Lineage, project: WaveProject, options: Proje
           ...(view ? { originalFixtures: view } : {}),
           label: project.id,
         })
-        if (view && !(await verifyTree(view, options.fixtures))) throw new InfraError(`${project.id}: the original-fixture view changed during verification`)
+        // A tampered comparison view is a boundary violation, never a reason to re-roll the branch.
+        if (view && !(await verifyTree(view, options.fixtures))) throw new LateInfraError(`${project.id}: the original-fixture view changed during verification`)
         if (result.kind === 'infra') throw new InfraError(result.reason)
         reports.push(result.report)
         await lineage.event('PROJECT_VERIFIED', { project: project.id, generation, verdict: result.verdict })

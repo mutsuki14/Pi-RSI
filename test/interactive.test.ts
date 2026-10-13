@@ -232,4 +232,45 @@ describe('interactive Actor protocol', () => {
     const toolResult = h.calls.filter(entry => entry.role === 'verifier')[1]!
     expect(toolResult.input).not.toContain('PNG')
   })
+
+  it('keeps every message of a new task after a PASS, and honours an explicit new_task after a FAIL', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' }, taskMessages: undefined } })
+    const h = harness
+    h.script('main', [call('rsi_submit'), say('one')])
+    h.script('verifier', [say('VERDICT: PASS')])
+    await h.session.prompt('Task one.')
+    // A new task spread over two messages after the PASS.
+    h.script('main', [say('noted')])
+    await h.session.prompt('Task two, part A.')
+    h.script('main', [call('rsi_submit'), say('two')])
+    h.script('verifier', [say('VERDICT: FAIL\nmissing part')])
+    await h.session.prompt('Task two, part B.')
+    // A third task after an unlearned FAIL, declared explicitly.
+    h.script('main', [call('rsi_submit', { new_task: true }), say('three')])
+    h.script('verifier', [say('VERDICT: PASS')])
+    await h.session.prompt('Task three.')
+    const charters = h.calls.filter(entry => entry.role === 'verifier').map(entry => entry.input)
+    expect(charters[1]).toContain('Task two, part A.')
+    expect(charters[1]).toContain('Task two, part B.')
+    expect(charters[1]).not.toContain('Task one.')
+    expect(charters[2]).toContain('Task three.')
+    expect(charters[2]).not.toContain('Task two')
+    expect(charters[2]).toContain('This is candidate generation 1.')
+  })
+
+  it('notes memory changed outside a learning phase when the next learning phase opens', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } } })
+    const h = harness
+    const { readdir } = await import('node:fs/promises')
+    h.script('main', [call('rsi_memory_list'), say('ok')])
+    await h.session.prompt('Look at memory.')
+    const [key] = await readdir(join(h.agentDir, 'rsi', 'projects'))
+    await writeFile(join(h.agentDir, 'rsi', 'projects', key!, 'store', 'memory', 'hand-edit.md'), 'edited by hand')
+    h.script('main', [call('rsi_submit'), call('rsi_learn'), say('ok')])
+    h.script('verifier', [say('VERDICT: PASS')])
+    await h.session.prompt('Do the task.')
+    const learn = toolResults(h.session).find(result => result.tool === 'rsi_learn')!
+    expect(learn.text).toContain('changed outside a learning phase')
+  })
 })
+

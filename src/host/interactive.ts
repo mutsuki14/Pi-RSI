@@ -97,13 +97,14 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
     promptSnippet: 'Request independent verification of a completed non-trivial task',
     promptGuidelines: ['Call rsi_submit when a non-trivial task with a checkable result is complete; skip it for questions and conversation.'],
     parameters: Type.Object({
+      new_task: Type.Optional(Type.Boolean({ description: 'True when this submission is for a different task than your earlier submissions in this conversation: a fresh Verifier starts, and only the user messages since your last RSI tool result count as the task.' })),
       evidence_leads: Type.Optional(Type.Array(Type.Object({
         claim: Type.String({ description: 'The requirement the probe demonstrates.' }),
         probe: Type.String({ description: 'One exact read-only shell command that prints PASS only when the claim holds.' }),
       }), { description: 'Only after UNVERIFIED: reproducible evidence leads. Each pairs a requirement with one exact read-only command the Verifier can re-run. Never a narrative of your own work.' })),
     }),
     executionMode: 'sequential',
-    async execute(toolCallId, params: { evidence_leads?: Array<{ claim: string, probe: string }> }, signal, onUpdate, ctx) {
+    async execute(toolCallId, params: { new_task?: boolean, evidence_leads?: Array<{ claim: string, probe: string }> }, signal, onUpdate, ctx) {
       const host = await hostOf(ctx)
       const sessionId = sessionIdOf(ctx)
       const branch = branchOf(ctx)
@@ -117,12 +118,16 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       }
       const isolation = await host.isolation()
       const cwd = host.paths.project
-      const newTask = task.verdict === 'PASS' && fold.requests > task.requestCount
+      // A PASS followed by new user messages, or an explicit new task, starts a fresh Verifier lineage.
+      const explicitNew = params.new_task === true && task.generation > 0
+      const newTask = (task.verdict === 'PASS' && fold.requests > task.requestCount) || explicitNew
       if (newTask) await host.closeVerifier(sessionId)
+      const taskStart = explicitNew && fold.lastStateIndex < fold.requestTexts.length ? fold.lastStateIndex : fold.taskStart
+      const scope = { ...fold, taskStart, taskBaseline: fold.baselines[taskStart] }
       const generation = (newTask ? 0 : task.generation) + 1
       const excludes = host.harnessExcludes()
       signal?.throwIfAborted()
-      const before = await workspaceState(cwd, excludes, fold.taskBaseline)
+      const before = await workspaceState(cwd, excludes, scope.taskBaseline)
       let checkpoint: WorkspaceCheckpoint
       let gitMeta: GitMetadataCheckpoint | undefined
       try {
@@ -184,7 +189,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
           }
         }
         inspection = await inspect(live.conversation, {
-          task: authoritativeTask(fold, host.config.verifier.taskMessages),
+          task: authoritativeTask(scope, host.config.verifier.taskMessages),
           generation,
           mechanicalContext: before.summary,
           ...(leads ? { leads } : {}),
@@ -245,7 +250,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
             throw new Error(`unknown verdict ${String(unreachable)}`)
           }
         }
-        return result(guidance + note, { rsi: 1, op: 'submit', newTask, generation, verdict, requestCount: fold.requests, report: ref, session: sessionId }, usage)
+        return result(guidance + note, { rsi: 1, op: 'submit', newTask, generation, verdict, requestCount: fold.requests, report: ref, session: sessionId, taskStart }, usage)
       } catch (error) {
         // The Verifier published a verdict the branch never records: its context must not carry it into the next inspection.
         await host.closeVerifier(sessionId)
@@ -290,7 +295,11 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       await store.openDraft(episode, { fresh: task.learning?.episode !== episode })
       const last = task.reports.at(-1)
       const report = (last && (await store.getReport(last.sha256))) ?? '(the final report is in your history above)'
-      return result(distillationMessage(task.verdict, report, 'actor', store.limits), {
+      const integrity = await store.integrity()
+      const drift = integrity.consistent
+        ? ''
+        : `\n\nHARNESS NOTE: durable memory (tree ${integrity.canonical.slice(0, 12)}) differs from the tree the journal last recorded (${integrity.recorded.slice(0, 12)}): it was changed outside a learning phase. Review those changes as part of this reconciliation.`
+      return result(distillationMessage(task.verdict, report, 'actor', store.limits) + drift, {
         rsi: 1,
         op: 'learn',
         learning: { episode, owner: sessionId, stage: 'distill', outcome: task.verdict, verdictEntry: task.verdictEntry },

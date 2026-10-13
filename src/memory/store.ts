@@ -775,6 +775,18 @@ export class MemoryStore {
     return record
   }
 
+  /**
+   * Whether canonical memory is the tree the journal last recorded. A
+   * mismatch means memory changed outside a learning phase (a hand edit, or a
+   * process that wrote into the store directly).
+   */
+  async integrity(): Promise<{ consistent: boolean, canonical: string, recorded: string }> {
+    const journal = await this.journal()
+    const recorded = journal.at(-1)?.treeAfter ?? manifestHash(Object.create(null) as Manifest)
+    const canonical = await this.treeHash()
+    return { consistent: canonical === recorded, canonical, recorded }
+  }
+
   async journal(): Promise<CommitRecord[]> {
     const path = join(this.root, 'journal.jsonl')
     if (!(await exists(path))) return []

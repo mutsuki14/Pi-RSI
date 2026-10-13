@@ -320,6 +320,7 @@ export default function piRsi(pi: ExtensionAPI): void {
         const store = await current.store()
         const isolation = await current.isolation().catch(error => ({ mode: 'unavailable', reason: String(error) }))
         const journal = await store.journal()
+        const integrity = await store.integrity()
         const fold = foldBranch(ctx.sessionManager.getBranch() as unknown as BranchEntry[])
         lines.push(
           `memory: ${store.canonicalDir} (${(await store.inventory()).length} files, tree ${(await store.treeHash()).slice(0, 12)}${(await store.frozen()) ? ', FROZEN' : ''})`,
@@ -328,6 +329,7 @@ export default function piRsi(pi: ExtensionAPI): void {
           `task: ${fold.state.verdict ? `${fold.state.verdict} at generation ${fold.state.generation}` : 'no verdict yet'}${fold.state.learning ? `; learning ${fold.state.learning.stage} (${fold.state.learning.episode})` : ''}`,
           `commits: ${journal.length}${journal.length ? ` — latest ${journal.at(-1)!.episode} (${journal.at(-1)!.outcome}, ${journal.at(-1)!.ts})` : ''}`,
         )
+        if (!integrity.consistent) lines.push(`WARNING: memory tree ${integrity.canonical.slice(0, 12)} differs from the last journal record (${integrity.recorded.slice(0, 12)}): it was changed outside a learning phase`)
         if (current.exploration) lines.push(`exploring: ${current.exploration.lineage} (${current.exploration.phase}) for ${Math.round((Date.now() - current.exploration.started) / 1000)}s`)
         const lineages = await lineageList(current)
         if (lineages.length) lines.push('lineages:', ...lineages.slice(-10).map(line => `  ${line}`))
