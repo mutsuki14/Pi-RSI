@@ -141,6 +141,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       }
       let inspection
       let changed: string[] = []
+      let probeEffects: string[] = []
       try {
         let live = host.verifiers.get(sessionId)
         const fresh = live === undefined
@@ -157,7 +158,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
             conversation: await runtime.open({
               role: 'verifier',
               label: `interactive verifier ${sessionId.slice(0, 8)}`,
-              system: verifierSystem(host.config.verifier.allowUnverified, isolation.mode),
+              system: verifierSystem(host.config.verifier.allowUnverified, isolation.mode, 'partial'),
               cwd,
               memory: { access: 'none' },
             }),
@@ -177,6 +178,9 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
           // Probes run after the checkpoint: their effects are restored with the Verifier's.
           if (given.length > 0) {
             leads = formatLeads(await classifyLeads(given, { cwd, isolation, hidden: host.hiddenPaths(ctx), scratchRoot: host.paths.scratch, timeoutMs: 60_000, ...(signal ? { signal } : {}) }))
+            // The Verifier inspects the candidate the Actor submitted, not one changed by its probes.
+            probeEffects = await checkpoint.restore()
+            if (gitMeta) probeEffects = [...probeEffects, ...(await gitMeta.restore())]
           }
         }
         inspection = await inspect(live.conversation, {
@@ -216,11 +220,12 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
         }
       }
       try {
-        const note = changed.length === 0
+        const probeNote = probeEffects.length === 0 ? '' : `\n\nHARNESS NOTE: your evidence probes changed ${probeEffects.length} path(s), restored before the inspection: ${probeEffects.slice(0, 20).join(', ')}`
+        const note = probeNote + (changed.length === 0
           ? ''
           : checkpoint.restores
             ? `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection and were restored: ${changed.slice(0, 20).join(', ')}${changed.length > 20 ? ', …' : ''}`
-            : `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection; the workspace was too large to checkpoint, so inspect them: ${changed.slice(0, 20).join(', ')}`
+            : `\n\nHARNESS NOTE: ${changed.length} path(s) changed during the inspection; the workspace was too large to checkpoint, so inspect them: ${changed.slice(0, 20).join(', ')}`)
         const ref = await store.putReport(inspection.report)
         const learn = !(await frozen(host, store))
         const verdict: Verdict = inspection.verdict

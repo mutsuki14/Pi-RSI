@@ -7,7 +7,10 @@ import { EPISTEMIC_CORE } from './epistemic.ts'
  */
 export type VerifierMechanics = 'sandbox' | 'rollback'
 
-function mechanicsText(mechanics: VerifierMechanics): string {
+/** What the rollback restores: the whole candidate tree (lineages) or its tracked and untracked files (interactive). */
+export type CheckpointScope = 'whole' | 'partial'
+
+function mechanicsText(mechanics: VerifierMechanics, scope: CheckpointScope): string {
   return mechanics === 'sandbox'
     ? `You have read-only file tools and a shell. Every shell command runs in a read-only filesystem sandbox:
 it can write only to your private scratch directory, named by $RSI_SCRATCH (and $TMPDIR), which persists
@@ -17,7 +20,13 @@ discarded when your role ends and is never part of the candidate. A "Read-only f
 boundary worked. Paths private to the Actor Agent are masked and appear empty. Network access is NOT isolated: never mutate live services, databases, or anything outside the
 candidate (no state-changing requests, resets, inserts, or pushes), because those effects cannot be rolled
 back. These mechanics protect the scored state without prescribing your method.`
-    : `You have read-only file tools and a shell. The harness checkpoints the candidate before your inspection
+    : scope === 'whole'
+      ? `You have read-only file tools and a shell. The harness copies the whole candidate tree before your
+inspection and restores it afterwards, so any effects your commands have on the candidate's files are
+reverted. Put temporary files in your private scratch directory $RSI_SCRATCH, which is discarded when your
+role ends and is never part of the candidate. Never mutate live services, databases, or anything outside the
+candidate: those effects cannot be rolled back.`
+      : `You have read-only file tools and a shell. The harness checkpoints the candidate before your inspection
 and restores it afterwards: its tracked and untracked files and its repository refs, index, configuration,
 and hooks. Ignored files (build outputs, dependency trees, caches) are NOT restored, so do not change them.
 Put temporary files in your private scratch directory $RSI_SCRATCH, which is discarded when your role ends
@@ -26,7 +35,7 @@ candidate: those effects cannot be rolled back.`
 }
 
 /** Verifier system prompt (RSIAgent `AGENTIC_VERIFIER_SYSTEM`), adapted to pi tools. */
-export function verifierSystem(allowUnverified: boolean, mechanics: VerifierMechanics): string {
+export function verifierSystem(allowUnverified: boolean, mechanics: VerifierMechanics, scope: CheckpointScope = 'whole'): string {
   const verdicts = allowUnverified
     ? 'VERDICT: PASS, VERDICT: FAIL, or VERDICT: UNVERIFIED'
     : 'VERDICT: PASS or VERDICT: FAIL'
@@ -40,7 +49,7 @@ proof of failure.`
 investigate, which tools to use, how deeply to test, and when the evidence is sufficient. You do not repair
 the task.
 
-${mechanicsText(mechanics)}
+${mechanicsText(mechanics, scope)}
 
 The Actor Agent's durable memory, its session logs, and the harness's private state are off-limits to you:
 your file tools refuse them${mechanics === 'sandbox' ? ' and your shell sees them masked' : ''}. Do not look for them; they are not

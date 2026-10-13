@@ -315,6 +315,16 @@ There is no prescribed format. Neither the Verifier nor the Curriculum grades me
 ${promotion === 'actor' ? 'Call rsi_memory_commit again when' : 'End your turn with a short final reply once'} the complete memory you choose to carry forward is reconciled and ready.`
 }
 
+/** The draft lost its base: another learning phase was promoted while this one distilled. */
+export function memoryChangedMessage(): string {
+  return `ACTOR AGENT — DURABLE MEMORY CHANGED.
+
+Another learning phase was promoted while you distilled, so your draft can no longer be promoted on top of
+the memory it was copied from. The harness discarded it and opened a fresh draft from the current durable
+memory. Redo your distillation of this experience against the fresh draft (rsi_memory_list shows it), then
+end your turn with a short final reply saying the draft is ready.`
+}
+
 /** Phase-2 causal handoff to the Curriculum, separate from memory (RSIAgent `charter.py:1232`). */
 export function learningDiagnosisMessage(outcome: 'PASS' | 'FAIL', report: string): string {
   return `ACTOR AGENT — FREE-FORM LEARNING DIAGNOSIS.

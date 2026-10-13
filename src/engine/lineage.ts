@@ -177,6 +177,10 @@ class Lineage {
       throw new Error(`lineage ${this.id} already exists; choose a new lineage id`)
     }
     if (await this.deps.store.frozen()) throw new MemoryFrozenError()
+    // Episode ids are `<lineage>~…`: a lineage id already in the journal (a shared memory store) is refused too.
+    if ((await this.deps.store.journal()).some(record => record.episode.startsWith(`${this.id}~`))) {
+      throw new Error(`lineage ${this.id} already learned into this memory store; choose a new lineage id`)
+    }
     await mkdir(this.ws, { recursive: true })
     await mkdir(this.priv, { recursive: true })
     await writeFile(join(this.priv, 'lineage.json'), `${JSON.stringify({ id: this.id, ...meta, workspace: this.ws, startedAt: new Date().toISOString() }, null, 2)}\n`)
@@ -319,6 +323,12 @@ async function protectedInspection(
     const leads = input.leads && input.leads.length > 0
       ? formatLeads(lineage.deps.classifyLeads ? await lineage.deps.classifyLeads(input.leads, input.root, signal) : input.leads)
       : undefined
+    if (leads && (await treeFingerprint(input.root)) !== fingerprint) {
+      // The Verifier inspects the candidate the Actor submitted, not one changed by its probes.
+      await rm(input.root, { recursive: true, force: true })
+      await cp(input.checkpointDir, input.root, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true })
+      await lineage.event('PROBE_EFFECTS_ROLLED_BACK', { candidate: input.label, generation: input.generation })
+    }
     const result = await inspect(verifier, {
       task: input.task,
       generation: input.generation,
@@ -421,7 +431,8 @@ async function runProjectWithRetry(lineage: Lineage, project: WaveProject, optio
     } catch (error) {
       // Only runtime infrastructure before a verdict restarts a branch; transport exhaustion is the role's own outcome.
       if (!(error instanceof InfraError) || error instanceof TransportInfraError || error instanceof LateInfraError || attempt >= lineage.deps.config.branchRetries) throw error
-      const moved = await moveAside(join(options.episodeDir, 'project'), join(options.episodeDir, 'infra_attempts'))
+      // Out of the episode tree: the restarted Actor and Verifier must not see the unverified attempt.
+      const moved = await moveAside(join(options.episodeDir, 'project'), join(lineage.priv, 'infra_attempts', relative(lineage.ws, options.episodeDir).split(/[\\/]/).join('__')))
       await lineage.event('PROJECT_RESTARTED_UNSCORED', { project: project.id, reason: error.message, preserved: moved })
     }
   }
@@ -519,7 +530,7 @@ export async function runBroadExploration(deps: EngineDeps, input: { lineage: st
             const learning = await learn(branch.actor, {
               store,
               binding: branch.binding,
-              episode: `${input.lineage}-w${wave}-${branch.project.id}`,
+              episode: `${input.lineage}~w${wave}~${branch.project.id}`,
               kind: 'practice',
               outcome: branch.verdict,
               report: branch.reports.at(-1)!,
@@ -665,7 +676,7 @@ async function runTargetAttempt(lineage: Lineage, cycle: number, target: string,
       const learning = await learn(actor, {
         store,
         binding,
-        episode: `${lineage.id}-t${cycle}`,
+        episode: `${lineage.id}~t${cycle}`,
         kind: 'target',
         outcome: verdict as 'PASS' | 'FAIL',
         report,
@@ -735,7 +746,7 @@ export async function runDeepExploration(
       if (outcome.verdict === 'PASS' && !reviewPass) return await finish('verifier_pass', outcome)
       if (finalAfterStall) return await finish('curriculum_stalled_final_target_test', outcome)
       if (outcome.verdict === 'UNVERIFIED') return await finish('target_harness_unverified', outcome)
-      if (targetCycles >= config.targetCycleBudget) return await finish('budget_exhausted', outcome)
+      if (targetCycles >= config.targetCycleBudget) return await finish(outcome.verdict === 'PASS' ? 'verifier_pass' : 'budget_exhausted', outcome)
 
       if (!curriculum) {
         const memory: MemoryBinding = config.curriculumMemoryAccess === 'none' ? { access: 'none' } : readBinding(store.canonicalDir)
@@ -746,7 +757,7 @@ export async function runDeepExploration(
       let practiceThisEvolution = 0
       while (true) {
         if (practiceProjects >= config.deepPracticeBudget) {
-          if (practiceThisEvolution === 0) return await finish('budget_exhausted', outcome)
+          if (practiceThisEvolution === 0) return await finish(outcome.verdict === 'PASS' ? 'verifier_pass' : 'budget_exhausted', outcome)
           // Practice changed memory since the last attempt: a final fresh target test is mandatory.
           finalAfterBudget = true
           break
@@ -789,7 +800,7 @@ export async function runDeepExploration(
           const learning = await learn(branch.actor, {
             store,
             binding: branch.binding,
-            episode: `${input.lineage}-${id}`,
+            episode: `${input.lineage}~${id}`,
             kind: 'practice',
             outcome: branch.verdict,
             report,

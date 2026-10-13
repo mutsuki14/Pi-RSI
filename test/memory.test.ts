@@ -414,3 +414,24 @@ describe('tree hashing edge cases', () => {
     }
   })
 })
+
+describe('regex memory search', () => {
+  it('times out a catastrophically backtracking pattern instead of blocking the event loop', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-rsi-redos-'))
+    try {
+      const store = new MemoryStore(root, { maxFiles: 10, maxTotalBytes: 100_000, maxFileBytes: 10_000 }, { keepHistory: false })
+      await store.init()
+      await writeFile(join(store.canonicalDir, 'a.md'), `${'a'.repeat(4000)}!\nbeta line`)
+      let ticks = 0
+      const timer = setInterval(() => ticks++, 50)
+      const started = Date.now()
+      await expect(store.search('(a+)+$', { regex: true, maxResults: 5 })).rejects.toThrow('took longer')
+      clearInterval(timer)
+      expect(Date.now() - started).toBeLessThan(5000)
+      expect(ticks).toBeGreaterThan(10)
+      expect(await store.search('^beta', { regex: true, maxResults: 5 })).toEqual([{ path: 'a.md', line: 2, text: 'beta line' }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})

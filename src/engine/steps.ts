@@ -1,6 +1,6 @@
-import { MemoryLimitError, type CommitRecord, type EpisodeKind, type MemoryStore, type TerminalOutcome } from '../memory/store.ts'
+import { MemoryConflictError, MemoryLimitError, type CommitRecord, type EpisodeKind, type MemoryStore, type TerminalOutcome } from '../memory/store.ts'
 import { parseUniqueToken, parseVerdict } from '../protocol/tokens.ts'
-import { distillationMessage, learningDiagnosisMessage, reconciliationMessage, transportContinuation } from '../roles/actor.ts'
+import { distillationMessage, learningDiagnosisMessage, memoryChangedMessage, reconciliationMessage, transportContinuation } from '../roles/actor.ts'
 import { verifierCharter, verifierTransportContinuation, type VerifierCharterInput } from '../roles/verifier.ts'
 import { converse } from './converse.ts'
 import { InfraError, type MemoryBinding, type RoleConversation, type TransportPolicy, type VerificationResult } from './types.ts'
@@ -51,7 +51,10 @@ function scanLeads(handoff: string): LeadScan {
     const number = leads.length + problems.length + 1
     let probe = probeMatch[1]!.trim()
     const inline = INLINE_FENCE.exec(probe)
+    const ticked = /^`([^`]+)`$/.exec(probe)
     if (inline) probe = inline[2]!.trim()
+    // Markdown inline code around a one-line probe is formatting, not a command substitution.
+    else if (ticked) probe = ticked[1]!.trim()
     else if (probe === '' || FENCE_OPENER.test(probe)) {
       // A multi-line probe: the fenced block opening on this line or the next non-empty one.
       let open = index
@@ -210,7 +213,7 @@ export interface LearnResult {
  */
 export async function learn(actor: RoleConversation, options: LearnOptions): Promise<LearnResult> {
   const { store, binding } = options
-  const draft = await store.openDraft(options.episode, { fresh: true })
+  let draft = await store.openDraft(options.episode, { fresh: true })
   const openDraftView = () => {
     binding.access = 'draft'
     binding.draft = draft
@@ -245,6 +248,15 @@ export async function learn(actor: RoleConversation, options: LearnOptions): Pro
         const unchanged = Object.keys(final).filter(path => !changed.has(path)).sort()
         return diagnosis === undefined ? { commit, unchanged } : { commit, diagnosis, unchanged }
       } catch (error) {
+        if (error instanceof MemoryConflictError && round < options.policy.ceiling) {
+          // Memory changed under the draft (another learning phase was promoted): relearn against current memory.
+          await store.discardDraft(options.episode)
+          draft = await store.openDraft(options.episode, { fresh: true })
+          openDraftView()
+          await actor.send(memoryChangedMessage(), options.signal)
+          await actor.send(reconciliationMessage('engine'), options.signal)
+          continue
+        }
         if (!(error instanceof MemoryLimitError) || round >= options.policy.ceiling) throw error
         openDraftView()
         await converse(

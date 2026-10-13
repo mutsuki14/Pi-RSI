@@ -184,3 +184,10 @@ describe('verifier prompt', () => {
   })
 })
 
+describe('evidence lead parsing', () => {
+  it('unwraps a one-line probe written as Markdown inline code', async () => {
+    const { parseLeads } = await import('../src/engine/steps.ts')
+    expect(parseLeads('STATUS: SUBMIT\nCLAIM: out exists\nPROBE: `test -f out && echo PASS`')).toEqual([{ claim: 'out exists', probe: 'test -f out && echo PASS' }])
+  })
+})
+

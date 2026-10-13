@@ -115,7 +115,7 @@ describe('runBroadExploration', () => {
     const result = await runBroadExploration(deps(runtime), { lineage, direction: 'a Linux CLI workspace', paths: paths(lineage) })
     expect(result).toMatchObject({ termination: 'saturated', waves: 1, officialEvaluatorCalls: 0, officialEvaluatorFeedbackEnteredLearning: false })
     expect(result.projects.map(project => [project.id, project.verdict])).toEqual([['alpha', 'PASS'], ['beta', 'FAIL']])
-    expect((await store.journal()).map(record => record.episode)).toEqual(['l1-w1-alpha', 'l1-w1-beta'])
+    expect((await store.journal()).map(record => record.episode)).toEqual(['l1~w1~alpha', 'l1~w1~beta'])
     // Captured fixtures stay private; the authoring tree is gone so branches never share a mutable copy.
     expect(await readdir(join(paths(lineage).private, 'wave-001', 'projects', 'beta', 'fixtures', 'tree', 'refs'))).toEqual(['spec.md'])
     expect(await readdir(join(paths(lineage).workspace, 'wave-001'))).toEqual(['alpha', 'beta'])
@@ -168,7 +168,9 @@ describe('runBroadExploration', () => {
     const record = JSON.parse(await readFile(join(paths('l3').private, 'result.json'), 'utf8')) as { termination: string }
     expect(record.termination).toBe('infra')
     // The failed attempt is kept for recovery rather than deleted.
-    expect(await readdir(join(paths('l3').workspace, 'wave-001', 'broken', 'infra_attempts'))).toEqual(['attempt_001'])
+    // The failed attempt is kept privately, out of the restarted roles' tree.
+    expect(await readdir(join(paths('l3').private, 'infra_attempts', 'wave-001__broken'))).toEqual(['attempt_001'])
+    expect(await readdir(join(paths('l3').workspace, 'wave-001', 'broken'))).not.toContain('infra_attempts')
   })
 
   it('rolls back Verifier effects on the candidate', async () => {
@@ -554,4 +556,78 @@ describe('engine regressions', () => {
     await expect(runDeepExploration(deps(runtime), { lineage: 'late', target: 'In <PROJECT_ROOT> do it.', paths: paths('late') })).rejects.toThrow('consecutive actionless segments')
     expect(practiceActorOpens).toBe(1)
   })
+
+  it('relearns against current memory when another learning phase was promoted meanwhile', async () => {
+    let distillations = 0
+    const runtime = new FakeRuntime({
+      curriculum: () => 'unused',
+      actor: async (message, options, turn) => {
+        if (turn === 0) {
+          await writeFile(join(options.cwd, 'o'), 'o')
+          return 'STATUS: SUBMIT'
+        }
+        if (message.includes('MEMORY DISTILLATION') || message.includes('DURABLE MEMORY CHANGED')) {
+          distillations++
+          await writeMemory(store, options, 'lesson.md', `lesson ${distillations}`)
+          if (distillations === 1) {
+            // Another learning phase is promoted while this one distills.
+            const other = await store.openDraft('other-episode')
+            await store.writeDraft(other, 'other.md', 'x')
+            await store.commit(other, { kind: 'task', outcome: 'PASS' })
+          }
+          return 'draft ready'
+        }
+        return message.includes('LEARNING DIAGNOSIS') ? 'diag' : 'reconciled'
+      },
+      verifier: () => 'VERDICT: PASS',
+    })
+    const result = await runDeepExploration(deps(runtime, { stopPolicy: 'verifier_pass' }), { lineage: 'conflict', target: 'In <PROJECT_ROOT> do it.', paths: paths('conflict') })
+    expect(result.termination).toBe('verifier_pass')
+    expect(distillations).toBe(2)
+    expect(await readFile(join(store.canonicalDir, 'lesson.md'), 'utf8')).toBe('lesson 2')
+    expect(await readFile(join(store.canonicalDir, 'other.md'), 'utf8')).toBe('x')
+  })
+
+  it('rolls probe effects back before the Verifier inspects', async () => {
+    const runtime = new FakeRuntime({
+      curriculum: () => 'unused',
+      actor: async (message, options, turn) => {
+        if (turn === 0) {
+          await writeFile(join(options.cwd, 'o'), 'o')
+          return 'STATUS: SUBMIT'
+        }
+        if (message.includes('could not CONFIRM')) return 'STATUS: SUBMIT\nCLAIM: o exists\nPROBE: touch probe-effect && echo PASS'
+        return message.includes('LEARNING DIAGNOSIS') ? 'diag' : 'ok'
+      },
+      verifier: async (_message, options, turn) => {
+        if (turn === 0) return 'VERDICT: UNVERIFIED'
+        expect(await readdir(options.cwd)).toEqual(['o'])
+        return 'VERDICT: PASS'
+      },
+    })
+    const engine = {
+      ...deps(runtime, { stopPolicy: 'verifier_pass' as const }),
+      classifyLeads: async (leads: ReadonlyArray<{ claim: string, probe: string }>, root: string) => {
+        await writeFile(join(root, 'probe-effect'), 'x')
+        return leads.map(lead => ({ ...lead, classification: 'PASS' as const }))
+      },
+    }
+    const result = await runDeepExploration(engine, { lineage: 'probes', target: 'In <PROJECT_ROOT> do it.', paths: paths('probes') })
+    expect(result.verdict).toBe('PASS')
+    expect(events.some(event => event.type === 'PROBE_EFFECTS_ROLLED_BACK')).toBe(true)
+  })
+
+  it('labels a PASS at the target-cycle budget as a verifier PASS', async () => {
+    const runtime = new FakeRuntime({
+      curriculum: () => 'unused',
+      actor: async (_message, options, turn) => {
+        if (turn === 0) await writeFile(join(options.cwd, 'o'), 'o')
+        return turn === 0 ? 'STATUS: SUBMIT' : 'ok'
+      },
+      verifier: () => 'VERDICT: PASS',
+    })
+    const result = await runDeepExploration(deps(runtime, { targetCycleBudget: 1 }), { lineage: 'cap', target: 'In <PROJECT_ROOT> do it.', paths: paths('cap') })
+    expect(result).toMatchObject({ termination: 'verifier_pass', verdict: 'PASS' })
+  })
 })
+

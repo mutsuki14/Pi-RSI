@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFile, cp, lstat, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import type { LeakageAudit } from './audit.ts'
 import { compareCodePoints, sha256, treeSha256, type TreeHashes } from './hash.ts'
 import { safeRelativePath } from './paths.ts'
@@ -145,6 +146,44 @@ function manifestOf(files: ReadonlyMap<string, Buffer>): Manifest {
 
 const MAX_REGEX_LENGTH = 512
 const MAX_REGEX_LINE = 4096
+const REGEX_TIMEOUT_MS = 2_000
+
+/** Runs in a worker: a model-supplied pattern that backtracks catastrophically cannot block pi's event loop. */
+const REGEX_WORKER = `
+const { parentPort, workerData } = require('node:worker_threads')
+const re = new RegExp(workerData.query, 'i')
+const out = []
+search: for (const [path, text] of workerData.files) {
+  const lines = text.split('\\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (re.test(line.length > workerData.maxLine ? line.slice(0, workerData.maxLine) : line)) {
+      out.push({ path, line: i + 1, text: line.length > 400 ? line.slice(0, 400) + '\u2026' : line })
+      if (out.length >= workerData.maxResults) break search
+    }
+  }
+}
+parentPort.postMessage(out)
+`
+
+function regexSearch(query: string, files: Array<[string, string]>, maxResults: number): Promise<SearchMatch[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(REGEX_WORKER, { eval: true, workerData: { query, files, maxResults, maxLine: MAX_REGEX_LINE } })
+    const timer = setTimeout(() => {
+      void worker.terminate()
+      reject(new Error(`the regular expression search took longer than ${REGEX_TIMEOUT_MS / 1000}s; use a simpler pattern or a plain substring`))
+    }, REGEX_TIMEOUT_MS)
+    worker.once('message', matches => {
+      clearTimeout(timer)
+      void worker.terminate()
+      resolve(matches as SearchMatch[])
+    })
+    worker.once('error', error => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
 
 export interface SearchMatch {
   path: string
@@ -456,23 +495,23 @@ export class MemoryStore {
   }
 
   async search(query: string, options: { regex: boolean, maxResults: number }, dir = this.canonicalDir): Promise<SearchMatch[]> {
-    let matcher: RegExp | undefined
+    const files = await walk(dir)
     if (options.regex) {
       if (query.length > MAX_REGEX_LENGTH) throw new Error(`the regular expression is longer than ${MAX_REGEX_LENGTH} characters`)
       try {
-        matcher = new RegExp(query, 'i')
+        new RegExp(query, 'i')
       } catch (error) {
         throw new Error(`invalid regular expression: ${(error as Error).message}`)
       }
+      return regexSearch(query, [...files].map(([path, data]) => [path, data.toString('utf8')]), options.maxResults)
     }
     const needle = query.toLowerCase()
     const matches: SearchMatch[] = []
-    for (const [path, data] of await walk(dir)) {
+    for (const [path, data] of files) {
       const lines = data.toString('utf8').split('\n')
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!
-        // Regular expressions see a bounded prefix of each line, which bounds backtracking on pathological input.
-        if (matcher ? matcher.test(line.length > MAX_REGEX_LINE ? line.slice(0, MAX_REGEX_LINE) : line) : line.toLowerCase().includes(needle)) {
+        if (line.toLowerCase().includes(needle)) {
           matches.push({ path, line: i + 1, text: line.length > 400 ? `${line.slice(0, 400)}…` : line })
           if (matches.length >= options.maxResults) return matches
         }
