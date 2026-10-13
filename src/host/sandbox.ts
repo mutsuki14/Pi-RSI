@@ -127,13 +127,22 @@ export function sandboxArgs(spec: SandboxSpec): string[] {
   // A fresh /tmp per command for the Verifier, unless its own tree lives there (it must stay visible).
   if (readonly && !isWithin(own, physical('/tmp')) && !isWithin(cwd, physical('/tmp'))) args.push('--tmpfs', '/tmp')
   if (readonly) {
+    // A fresh /run: no host daemon sockets (Docker, D-Bus, user runtime dirs); DNS keeps working.
+    if (!isWithin(own, physical('/run')) && !isWithin(cwd, physical('/run'))) {
+      args.push('--tmpfs', '/run')
+      const resolv = physical('/etc/resolv.conf')
+      if (isWithin(resolv, physical('/run'))) args.push('--ro-bind-try', resolv, resolv)
+    }
     for (const socket of IPC_SOCKETS) mask(args, socket)
     for (const name of IPC_ENV) args.push('--unsetenv', name)
   }
-  for (const path of new Set(spec.hidden.map(physical))) mask(args, path)
+  const hidden = [...new Set(spec.hidden.map(physical))]
+  for (const path of hidden) mask(args, path)
   // Re-expose what the role must reach: its own tree and its scratch (bind sources resolve outside the masks).
   args.push(readonly ? '--ro-bind' : '--bind', own, own)
   if (!isWithin(cwd, own)) args.push(readonly ? '--ro-bind' : '--bind', cwd, cwd)
+  // The deepest root wins: a hidden path inside the own tree (pi-rsi state configured inside the project) stays masked.
+  for (const path of hidden) if (path !== own && (isWithin(path, own) || isWithin(path, cwd))) mask(args, path)
   args.push('--bind', scratch, scratch, '--setenv', 'RSI_SCRATCH', scratch, '--setenv', 'TMPDIR', scratch, '--chdir', spec.cwd)
   return args
 }
@@ -189,10 +198,18 @@ export function privatePathGuard(hidden: readonly string[], allowed: readonly st
   return {
     check(absolutePath, recursive) {
       const target = physical(absolutePath)
-      if (open.some(root => isWithin(target, root))) return undefined
-      for (const root of roots) {
-        if (isWithin(target, root)) return `${absolutePath} is hidden from this role`
-        if (recursive && isWithin(root, target)) return `searching ${absolutePath} would traverse paths hidden from this role; search inside your own tree instead`
+      // The deepest containing root decides: an allowed tree inside a hidden one is visible, a hidden path inside an allowed one is not.
+      const deepest = (candidates: string[]) => candidates.filter(root => isWithin(target, root)).reduce((best, root) => (root.length > best.length ? root : best), '')
+      const hiddenRoot = deepest(roots)
+      const openRoot = deepest(open)
+      if (hiddenRoot.length > openRoot.length) return `${absolutePath} is hidden from this role`
+      if (recursive) {
+        // A recursive search below the target must not reach a hidden root that is not itself inside an allowed one.
+        for (const root of roots) {
+          if (root === target || !isWithin(root, target)) continue
+          const reopened = open.some(allowedRoot => isWithin(root, allowedRoot) && allowedRoot.length > root.length)
+          if (!reopened) return `searching ${absolutePath} would traverse paths hidden from this role; search inside your own tree instead`
+        }
       }
       return undefined
     },

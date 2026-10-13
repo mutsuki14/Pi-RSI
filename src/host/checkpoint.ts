@@ -258,7 +258,8 @@ const GIT_META_DIRS = ['refs', 'hooks']
  * touching the work tree: branch heads and other refs, the index, the
  * repository configuration, and hooks. A commit, stash, reset, or config edit
  * by the Verifier is undone by restoring these (new objects stay, unreferenced).
- * Only a `.git` directory at the candidate root is covered.
+ * The git directory is located with git itself, so worktrees are covered; in a
+ * linked worktree the shared refs and config of the main repository are not.
  */
 export class GitMetadataCheckpoint {
   private constructor(
@@ -268,7 +269,10 @@ export class GitMetadataCheckpoint {
   ) {}
 
   static async take(root: string): Promise<GitMetadataCheckpoint | undefined> {
-    const gitDir = join(root, '.git')
+    // The repository's own directory: `.git` itself, or the directory a worktree's `.git` file points to.
+    const located = await gitLines(root, ['rev-parse', '--absolute-git-dir'])
+    const gitDir = located?.[0]?.trim()
+    if (!gitDir) return undefined
     const info = await lstat(gitDir).catch(() => undefined)
     if (!info?.isDirectory()) return undefined
     const store = await mkdtemp(join(tmpdir(), 'pi-rsi-gitmeta-'))

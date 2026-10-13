@@ -53,6 +53,23 @@ describe('private path guard', () => {
   })
 })
 
+describe('nested roots', () => {
+  it('keeps a hidden path inside the own tree hidden (the deepest root wins)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-rsi-nested-'))
+    try {
+      const own = join(root, 'project')
+      const state = join(own, '.pi-rsi')
+      await mkdir(state, { recursive: true })
+      const guard = privatePathGuard([state], [own])
+      expect(guard.check(join(own, 'src', 'a.ts'), false)).toBeUndefined()
+      expect(guard.check(join(state, 'memory', 'x.md'), false)).toContain('hidden from this role')
+      expect(guard.check(own, true)).toContain('would traverse')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe.skipIf(!hasBwrap)('bubblewrap sandbox', () => {
   it('passes the preflight', async () => {
     resetIsolationCache()
@@ -115,6 +132,27 @@ describe.skipIf(!hasBwrap)('bubblewrap sandbox', () => {
       expect(out.split('\n')).not.toContain('SECRET')
       expect(out).not.toContain('REMOUNTED')
       expect(out).not.toContain('WROTE')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('masks pi-rsi state configured inside the project, also after re-exposing the project', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-rsi-nested-bwrap-'))
+    try {
+      const cwd = join(root, 'project')
+      const scratch = join(root, 'scratch')
+      const state = join(cwd, '.pi-rsi')
+      await mkdir(state, { recursive: true })
+      await mkdir(scratch)
+      await writeFile(join(state, 'secret.md'), 'SECRET')
+      await writeFile(join(cwd, 'app.txt'), 'visible')
+      resetIsolationCache()
+      const decision = await decideIsolation('sandbox')
+      const command = sandboxCommand(decision.bwrap!, { cwd, own: cwd, scratch, hidden: [state] }, `cat app.txt; cat .pi-rsi/secret.md 2>/dev/null || echo NO-SECRET; true`)
+      const out = execFileSync('bash', ['-c', command], { cwd, encoding: 'utf8' })
+      expect(out).toContain('visible')
+      expect(out).toContain('NO-SECRET')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
