@@ -1,7 +1,7 @@
 import { lstat, readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { ConfigError, loadConfig, type LoadedConfig } from './config.ts'
 import type { EngineEvent } from './engine/types.ts'
@@ -37,6 +37,13 @@ export default function piRsi(pi: ExtensionAPI): void {
 
   let host: Host | undefined
   let hostError: string | undefined
+  /** Every interactive tool definition, and the ones currently withdrawn for the mode. */
+  const definitions = new Map<string, ToolDefinition<any, any>>()
+  const withdrawn = new Set<string>()
+  const register = (tool: ToolDefinition<any, any>) => {
+    definitions.set(tool.name, tool)
+    pi.registerTool(tool)
+  }
   /** Memory re-offer owed to the next run (compaction or resume), RSIAgent `_memory_revisit`. */
   let revisit: 'fold' | 'recovery' | undefined
 
@@ -66,18 +73,23 @@ export default function piRsi(pi: ExtensionAPI): void {
   }
 
   /** Tools follow the mode: none when off, read-only memory and verification when frozen. */
+  /** Tools follow the mode: none when off, read-only memory and verification when frozen. */
   const applyMode = async (current: Host) => {
     const store = current.config.mode === 'off' ? undefined : await current.store()
     const frozen = current.config.mode === 'frozen' || (store ? await store.frozen() : false)
-    const before = pi.getActiveTools()
-    const active = new Set(before)
-    for (const tool of INTERACTIVE_TOOLS) {
-      const on = current.config.mode !== 'off' && !(frozen && LEARNING_TOOLS.has(tool))
-      if (on) active.add(tool)
-      else active.delete(tool)
+    for (const name of INTERACTIVE_TOOLS) {
+      const definition = definitions.get(name)
+      if (!definition) continue
+      const on = current.config.mode !== 'off' && !(frozen && LEARNING_TOOLS.has(name))
+      // Withdraw and restore by re-registering: pi keeps other tools' state (unlike a new setActiveTools loadout).
+      if (!on && !withdrawn.has(name)) {
+        pi.registerTool({ ...definition, exposure: 'hidden' })
+        withdrawn.add(name)
+      } else if (on && withdrawn.has(name)) {
+        pi.registerTool(definition)
+        withdrawn.delete(name)
+      }
     }
-    // Only a real change: any call is a new loadout for pi, which drops tools waiting to be restored.
-    if (active.size !== before.length || before.some(tool => !active.has(tool))) pi.setActiveTools([...active])
   }
 
   const status = async (ctx: ExtensionContext) => {
@@ -165,7 +177,7 @@ export default function piRsi(pi: ExtensionAPI): void {
     return undefined
   })
 
-  registerInteractive({ pi, host: activeHost })
+  registerInteractive({ pi, register, host: activeHost })
 
   // The main Actor changes durable memory only through a learning phase: a tripwire for direct edits.
   pi.on('tool_call', async (event, ctx) => {
@@ -242,7 +254,7 @@ export default function piRsi(pi: ExtensionAPI): void {
     }
   }
 
-  pi.registerTool({
+  register({
     name: 'rsi_explore',
     exposure: 'model-only',
     label: 'RSI exploration',

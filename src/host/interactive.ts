@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { inspect, formatLeads, type Lead } from '../engine/steps.ts'
 import type { Verdict } from '../protocol/tokens.ts'
@@ -16,11 +16,13 @@ import { UsageMeter } from './usage.ts'
 
 export interface InteractiveDeps {
   pi: ExtensionAPI
+  /** Registers a tool (and lets the host re-register it to withdraw or restore it). */
+  register(tool: ToolDefinition<any, any>): void
   /** The host for the session's project; throws when pi-rsi is off or misconfigured. */
   host(ctx: ExtensionContext): Promise<Host>
 }
 
-type ToolResult = { content: Array<{ type: 'text', text: string }>, details: TaskMeta | undefined, usage?: import('@earendil-works/pi-ai').Usage }
+type ToolResult = { content: Array<{ type: 'text', text: string }>, details: TaskMeta | undefined, usage?: import('@earendil-works/pi-ai').Usage, isError?: boolean }
 
 const result = (text: string, details?: TaskMeta, usage?: UsageMeter): ToolResult => {
   const snapshot = usage?.snapshot()
@@ -53,7 +55,7 @@ function requireSingleStateCall(branch: BranchEntry[], fold: BranchFold, toolCal
   return step
 }
 
-export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void {
+export function registerInteractive({ pi, register, host: hostOf }: InteractiveDeps): void {
   const frozen = async (host: Host, store: MemoryStore) => host.config.mode === 'frozen' || (await store.frozen())
 
   /** The learning draft this session owns, reopened from disk if needed; frozen memory never serves a draft. */
@@ -86,9 +88,9 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       await (await hostOf(ctx)).refreshInventory().catch(() => undefined)
     },
   }
-  for (const tool of [...memoryReadTools(hooks), ...memoryWriteTools(hooks)]) pi.registerTool(tool)
+  for (const tool of [...memoryReadTools(hooks), ...memoryWriteTools(hooks)]) register(tool)
 
-  pi.registerTool({
+  register({
     name: 'rsi_submit',
     // The task state lives on the branch as this tool's result details: never callable from other tools.
     exposure: 'model-only',
@@ -144,7 +146,8 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       const progress = (event: RoleEvent) => {
         if (event.type === 'tool') onUpdate?.({ content: [{ type: 'text', text: `Verifier: ${event.detail}` }], details: undefined })
       }
-      let inspection
+      let inspection: Awaited<ReturnType<typeof inspect>> | undefined
+      let inspectionError: unknown
       let changed: string[] = []
       let probeEffects: string[] = []
       try {
@@ -200,7 +203,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
         })
       } catch (error) {
         await host.closeVerifier(sessionId)
-        throw error
+        inspectionError = error
       } finally {
         try {
           changed = await checkpoint.restore()
@@ -210,19 +213,22 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
           await gitMeta?.dispose()
         }
       }
+      // Role calls already made are reported with any failure, cancellation included.
+      const failure = (text: string): ToolResult & { isError: true } => {
+        const snapshot = usage.snapshot()
+        return { content: [{ type: 'text', text }], details: undefined, isError: true, ...(snapshot ? { usage: snapshot } : {}) }
+      }
       if (signal?.aborted) {
         await host.closeVerifier(sessionId)
-        signal.throwIfAborted()
+        return failure('rsi_submit was cancelled; no verdict was recorded.')
+      }
+      if (inspectionError !== undefined || inspection === undefined) {
+        const reason = inspectionError instanceof Error ? inspectionError.message : String(inspectionError)
+        return failure(`verification is unavailable: ${reason}. This is an infrastructure failure, not a verdict.`)
       }
       if (inspection.kind === 'infra') {
         await host.closeVerifier(sessionId)
-        const snapshot = usage.snapshot()
-        return {
-          content: [{ type: 'text' as const, text: `verification is unavailable: ${inspection.reason}. This is an infrastructure failure, not a verdict.` }],
-          details: undefined,
-          isError: true,
-          ...(snapshot ? { usage: snapshot } : {}),
-        }
+        return failure(`verification is unavailable: ${inspection.reason}. This is an infrastructure failure, not a verdict.`)
       }
       try {
         const probeNote = probeEffects.length === 0 ? '' : `\n\nHARNESS NOTE: your evidence probes changed ${probeEffects.length} path(s), restored before the inspection: ${probeEffects.slice(0, 20).join(', ')}`
@@ -259,7 +265,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
     },
   })
 
-  pi.registerTool({
+  register({
     name: 'rsi_learn',
     // The task state lives on the branch as this tool's result details: never callable from other tools.
     exposure: 'model-only',
@@ -307,7 +313,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
     },
   })
 
-  pi.registerTool({
+  register({
     name: 'rsi_memory_commit',
     // The task state lives on the branch as this tool's result details: never callable from other tools.
     exposure: 'model-only',

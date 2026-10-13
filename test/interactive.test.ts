@@ -272,5 +272,17 @@ describe('interactive Actor protocol', () => {
     const learn = toolResults(h.session).find(result => result.tool === 'rsi_learn')!
     expect(learn.text).toContain('changed outside a learning phase')
   })
+
+  it('withdraws the learning tools while memory is frozen and restores them after unfreezing', async () => {
+    harness = await makeHarness()
+    const h = harness
+    const active = () => h.session.getActiveToolNames()
+    expect(active()).toEqual(expect.arrayContaining(['rsi_submit', 'rsi_learn', 'rsi_memory_write', 'rsi_memory_commit', 'rsi_explore']))
+    await h.session.prompt('/rsi-freeze')
+    expect(active()).toEqual(expect.arrayContaining(['rsi_submit', 'rsi_memory_read', 'read', 'bash']))
+    for (const tool of ['rsi_learn', 'rsi_memory_write', 'rsi_memory_delete', 'rsi_memory_commit', 'rsi_explore']) expect(active()).not.toContain(tool)
+    await h.session.prompt('/rsi-unfreeze')
+    expect(active()).toEqual(expect.arrayContaining(['rsi_learn', 'rsi_memory_write', 'rsi_memory_commit', 'rsi_explore']))
+  })
 })
 
