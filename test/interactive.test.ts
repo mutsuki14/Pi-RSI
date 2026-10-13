@@ -221,4 +221,15 @@ describe('interactive Actor protocol', () => {
     expect(verifier.system).toContain('You are an independent Verifier Agent')
     expect(verifier.system).not.toContain('INJECTED')
   })
+
+  it('lets the Verifier read images as images through the guarded read tool', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } } })
+    const h = harness
+    await writeFile(join(h.project, 'dot.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4//8/AAX+Av6n1qHCAAAAAElFTkSuQmCC', 'base64'))
+    h.script('main', [call('rsi_submit'), say('ok')])
+    h.script('verifier', [call('read', { path: 'dot.png' }), say('VERDICT: PASS')])
+    await h.session.prompt('Render a dot.')
+    const toolResult = h.calls.filter(entry => entry.role === 'verifier')[1]!
+    expect(toolResult.input).not.toContain('PNG')
+  })
 })

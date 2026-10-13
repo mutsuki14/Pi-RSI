@@ -8,6 +8,7 @@ import {
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  detectSupportedImageMimeTypeFromFile,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import type { PathGuard } from './sandbox.ts'
@@ -37,6 +38,11 @@ export function guardedFileTools(cwd: string, guard: PathGuard, names: readonly 
             access: async path => {
               allow(path)
               await access(path, constants.R_OK)
+            },
+            // Images stay images (rendered evidence for the Verifier), as with pi's own read tool.
+            detectImageMimeType: async path => {
+              allow(path)
+              return detectSupportedImageMimeTypeFromFile(path)
             },
           },
         }) as ToolDefinition<any, any>)
