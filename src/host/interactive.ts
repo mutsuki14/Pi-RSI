@@ -121,7 +121,7 @@ export function registerInteractive({ pi, host: hostOf }: InteractiveDeps): void
       const generation = (newTask ? 0 : task.generation) + 1
       const excludes = host.harnessExcludes()
       signal?.throwIfAborted()
-      const before = await workspaceState(cwd, excludes)
+      const before = await workspaceState(cwd, excludes, fold.taskBaseline)
       let checkpoint: WorkspaceCheckpoint
       let gitMeta: GitMetadataCheckpoint | undefined
       try {

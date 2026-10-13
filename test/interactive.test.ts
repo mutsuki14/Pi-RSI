@@ -154,4 +154,37 @@ describe('interactive Actor protocol', () => {
     expect(await readFile(join(h.project, 'app.txt'), 'utf8')).toBe('v1\n')
     expect(() => execFileSync('git', ['config', 'core.pirsi'], { cwd: h.project })).toThrow()
   })
+
+  it('refuses state tools batched in one message, so each stage is read before the next', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } } })
+    const h = harness
+    const { fauxAssistantMessage, fauxToolCall } = await import('@earendil-works/pi-ai/providers/faux')
+    h.script('main', [
+      call('rsi_submit'),
+      fauxAssistantMessage([fauxToolCall('rsi_learn', {}), fauxToolCall('rsi_memory_commit', {})], { stopReason: 'toolUse' }),
+      say('ok'),
+    ])
+    h.script('verifier', [say('VERDICT: PASS')])
+    await h.session.prompt('Do it.')
+    const results = toolResults(h.session)
+    expect(results.map(result => [result.tool, result.isError])).toEqual([['rsi_submit', false], ['rsi_learn', true], ['rsi_memory_commit', true]])
+    expect(results[1]!.text).toContain('call only one of rsi_submit, rsi_learn, and rsi_memory_commit per message')
+  })
+
+  it('shows the Verifier commits the Actor made since the task began', async () => {
+    harness = await makeHarness({ config: { verifier: { isolation: 'rollback' } } })
+    const h = harness
+    h.script('main', [
+      call('bash', { command: 'echo feature > feature.txt && git add feature.txt && git -c user.email=a@a -c user.name=a commit -qm "add feature"' }),
+      call('rsi_submit'),
+      say('ok'),
+    ])
+    h.script('verifier', [say('VERDICT: PASS')])
+    await h.session.prompt('Add feature.txt and commit it.')
+    const charter = h.calls.find(entry => entry.role === 'verifier')!.input
+    expect(charter).toContain('COMMITS SINCE THE TASK BEGAN')
+    expect(charter).toContain('add feature')
+    expect(charter).toContain('feature.txt')
+    expect(charter).toContain('The working tree has no uncommitted changes.')
+  })
 })

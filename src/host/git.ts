@@ -102,7 +102,7 @@ export interface WorkspaceState {
  * the candidate. Submodules are not entered, and no external diff or textconv
  * program runs.
  */
-export async function workspaceState(cwd: string, exclude: readonly string[] = []): Promise<WorkspaceState> {
+export async function workspaceState(cwd: string, exclude: readonly string[] = [], baseline?: string): Promise<WorkspaceState> {
   const pathspec = ['--', '.', ...exclude.map(path => `:(exclude)${path}`)]
   const status = await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all', ...pathspec])
   if (status === undefined) {
@@ -114,8 +114,23 @@ export async function workspaceState(cwd: string, exclude: readonly string[] = [
   const lines = status.split('\n').filter(Boolean)
   const shown = lines.slice(0, 200).map(line => `  ${line}`).join('\n')
   const more = lines.length > 200 ? `\n  … ${lines.length - 200} more` : ''
-  const summary = lines.length === 0
-    ? `Candidate root: ${cwd}\nThe working tree has no uncommitted changes.`
-    : `Candidate root: ${cwd}\nUNCOMMITTED CHANGES (git status --porcelain, ${lines.length}):\n${shown}${more}\n\nDIFF STAT:\n${stat.trim()}`
-  return { tracked: true, summary, digest: sha256(`${status}\n${diff}`) }
+  const parts = [`Candidate root: ${cwd}`]
+  // RSIAgent's file-change evidence is relative to when the attempt began: commits made since then count too.
+  const head = (await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']))?.trim()
+  if (baseline && head && baseline !== head && /^[0-9a-f]{40,64}$/.test(baseline)) {
+    const log = (await git(cwd, ['log', '--oneline', '--no-decorate', '-n', '50', `${baseline}..HEAD`])) ?? ''
+    const since = (await git(cwd, [...diffArgs, '--stat', baseline, 'HEAD', ...pathspec])) ?? ''
+    if (log.trim()) parts.push(`COMMITS SINCE THE TASK BEGAN (git log --oneline ${baseline.slice(0, 12)}..HEAD):\n${log.trim()}\n\nCOMMITTED CHANGES SINCE THE TASK BEGAN (diff stat):\n${since.trim()}`)
+    else parts.push(`HEAD moved since the task began (from ${baseline.slice(0, 12)} to ${head.slice(0, 12)}) without new commits on top of it.`)
+  }
+  parts.push(lines.length === 0
+    ? 'The working tree has no uncommitted changes.'
+    : `UNCOMMITTED CHANGES (git status --porcelain, ${lines.length}):\n${shown}${more}\n\nDIFF STAT:\n${stat.trim()}`)
+  return { tracked: true, summary: parts.join('\n'), digest: sha256(`${status}\n${diff}`) }
+}
+
+/** The commit HEAD names, or undefined outside a repository or before the first commit. */
+export async function headCommit(cwd: string): Promise<string | undefined> {
+  const out = (await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']))?.trim()
+  return out && /^[0-9a-f]{40,64}$/.test(out) ? out : undefined
 }

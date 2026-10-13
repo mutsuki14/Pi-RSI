@@ -11,7 +11,8 @@ import { registerInteractive } from './host/interactive.ts'
 import type { PiRoleRuntime, ThinkingLevel } from './host/role-runtime.ts'
 import { physical } from './host/sandbox.ts'
 import { runSealedEvaluation } from './host/sealed.ts'
-import { foldBranch, type BranchEntry } from './host/task-state.ts'
+import { BASELINE_ENTRY, foldBranch, type BranchEntry } from './host/task-state.ts'
+import { headCommit } from './host/git.ts'
 import { UsageMeter } from './host/usage.ts'
 
 export { Host } from './host/host.ts'
@@ -144,6 +145,11 @@ export default function piRsi(pi: ExtensionAPI): void {
     }
     event.systemPromptOptions.sections.rsi_protocol = actorProtocol(frozen ? 'frozen' : 'learn', current.config.verifier.allowUnverified)
     event.systemPromptOptions.sections.rsi_memory = memory
+    if (event.messageType === 'user') {
+      // The project's HEAD as this prompt arrives: the Verifier's change facts span the whole task.
+      const head = await headCommit(current.paths.project).catch(() => undefined)
+      if (head) pi.appendEntry(BASELINE_ENTRY, { head })
+    }
     if (revisit && event.messageType === 'user') {
       const kind = revisit
       revisit = undefined

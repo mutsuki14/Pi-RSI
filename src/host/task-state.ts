@@ -60,6 +60,8 @@ export function initialTask(): TaskState {
 export interface BranchEntry {
   type: string
   id: string
+  customType?: string
+  data?: unknown
   message?: {
     role?: string
     toolName?: string
@@ -155,7 +157,12 @@ export interface BranchFold {
   stepOf: Map<string, string>
   /** Texts of user messages on the branch, oldest first. */
   requestTexts: string[]
+  /** HEAD commit recorded when the current task's first user message arrived, if any. */
+  taskBaseline: string | undefined
 }
+
+/** Custom entry pi-rsi appends before every user prompt: the project's HEAD commit at that moment. */
+export const BASELINE_ENTRY = 'pi-rsi-baseline'
 
 function userText(content: unknown): string {
   if (typeof content === 'string') return content
@@ -169,11 +176,25 @@ export function foldBranch(entries: readonly BranchEntry[]): BranchFold {
   let requests = 0
   const requestTexts: string[] = []
   const stepOf = new Map<string, string>()
+  // The task baseline is the HEAD recorded just before the task's first user message; a task ends at a
+  // promoted commit, or at a new user message after a PASS (the next submission is a new task).
+  let lastBaseline: string | undefined
+  let taskBaseline: string | undefined
+  let startsTask = true
   for (const entry of entries) {
+    if (entry.type === 'custom' && entry.customType === BASELINE_ENTRY) {
+      const head = isObject(entry.data) && typeof entry.data.head === 'string' ? entry.data.head : undefined
+      lastBaseline = head
+      continue
+    }
     if (entry.type !== 'message' || !entry.message) continue
     const message = entry.message
     if (message.role === 'user') {
       requests++
+      if (startsTask || (state.verdict === 'PASS' && requests > state.requestCount)) {
+        taskBaseline = lastBaseline
+        startsTask = false
+      }
       const body = userText(message.content).trim()
       if (body) requestTexts.push(body)
       continue
@@ -187,8 +208,9 @@ export function foldBranch(entries: readonly BranchEntry[]): BranchFold {
     const meta = parseMeta(message.details)
     if (!meta) continue
     state = settle(state, entry.id, meta, (message.toolCallId && stepOf.get(message.toolCallId)) ?? null)
+    if (meta.op === 'commit') startsTask = true
   }
-  return { state, requests, stepOf, requestTexts }
+  return { state, requests, stepOf, requestTexts, taskBaseline }
 }
 
 /** State-tool calls of one assistant message (to refuse batching them). */
