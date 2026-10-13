@@ -178,6 +178,7 @@ pi-rsi reads `~/.pi/agent/rsi.json`, then `<project>/.pi/rsi.json` when the proj
 - **Phase 2 has budgets** (`deepPracticeBudget` 6, `targetCycleBudget` 6 by default) that RSIAgent does not have; raise them for long lineages. The mandatory fresh target test after practice still runs when the practice budget is spent.
 - **Memory re-offers** follow RSIAgent's `_memory_revisit` after Verifier feedback, after a compaction, and when a session resumes; the `stagnation` trigger (repeated low-information actions) is not implemented.
 - **Lineages are not resumable** after a restart; interactive learning phases are.
+- **Role sessions load no extensions**, so your own permission or guard extensions do not see the tool calls of lineage Actors, the Curriculum, or the Verifier; pi-rsi applies its own path guards and sandbox instead.
 - **Forks**: a verdict is learned once across a session and its forks; the first promotion wins.
 
 ## Development

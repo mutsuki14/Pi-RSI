@@ -205,7 +205,7 @@ export class Host {
 /** Settings role sessions inherit from the main session, without what must stay per-session. */
 export function roleSettings(settings: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const key of ['shellPath', 'retry', 'compaction', 'httpIdleTimeoutMs', 'httpProxy']) {
+  for (const key of ['shellPath', 'shellCommandPrefix', 'retry', 'compaction', 'httpIdleTimeoutMs', 'httpProxy', 'thinkingBudgets', 'transport']) {
     if (settings[key] !== undefined) out[key] = structuredClone(settings[key])
   }
   // Idle cache warming would bill role contexts while they wait for the harness.

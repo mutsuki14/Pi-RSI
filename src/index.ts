@@ -69,13 +69,15 @@ export default function piRsi(pi: ExtensionAPI): void {
   const applyMode = async (current: Host) => {
     const store = current.config.mode === 'off' ? undefined : await current.store()
     const frozen = current.config.mode === 'frozen' || (store ? await store.frozen() : false)
-    const active = new Set(pi.getActiveTools())
+    const before = pi.getActiveTools()
+    const active = new Set(before)
     for (const tool of INTERACTIVE_TOOLS) {
       const on = current.config.mode !== 'off' && !(frozen && LEARNING_TOOLS.has(tool))
       if (on) active.add(tool)
       else active.delete(tool)
     }
-    pi.setActiveTools([...active])
+    // Only a real change: any call is a new loadout for pi, which drops tools waiting to be restored.
+    if (active.size !== before.length || before.some(tool => !active.has(tool))) pi.setActiveTools([...active])
   }
 
   const status = async (ctx: ExtensionContext) => {
@@ -99,10 +101,14 @@ export default function piRsi(pi: ExtensionAPI): void {
       if (current.config.mode !== 'off') await current.store()
       await applyMode(current)
       for (const warning of current.loaded.warnings) if (ctx.hasUI) ctx.ui.notify(`pi-rsi: ${warning}`, 'warning')
-      if (event.reason === 'resume' || event.reason === 'fork') revisit = 'recovery'
+      // A resumed conversation (also `pi -c` / `--session`, which start with reason "startup") gets RSIAgent's recovery re-offer.
+      const resumed = event.reason === 'resume' || event.reason === 'fork'
+        || (event.reason === 'startup' && ctx.sessionManager.getBranch().some(entry => entry.type === 'message'))
+      if (resumed) revisit = 'recovery'
       await status(ctx)
     } catch (error) {
-      if (ctx.hasUI) ctx.ui.notify(String(error instanceof Error ? error.message : error), 'error')
+      if (!ctx.hasUI) throw error
+      ctx.ui.notify(String(error instanceof Error ? error.message : error), 'error')
     }
   })
 
@@ -179,7 +185,7 @@ export default function piRsi(pi: ExtensionAPI): void {
   })
 
   // ---------------------------------------------------------------- exploration
-  const runLineage = async (ctx: ExtensionContext, request: ExploreRequest, signal: AbortSignal | undefined, progress: (line: string) => void) => {
+  const runLineage = async (ctx: ExtensionContext, request: ExploreRequest, signal: AbortSignal | undefined, progress: (line: string) => void, usage = new UsageMeter()) => {
     const current = await activeHost(ctx)
     const store = await current.store()
     if (current.config.mode === 'frozen' || (await store.frozen())) throw new Error('memory is frozen for test-time reuse; exploration lineages learn, so they are disabled')
@@ -201,7 +207,6 @@ export default function piRsi(pi: ExtensionAPI): void {
       if (await lstat(join(current.paths.lineages, lineage)).then(() => true, () => false)) {
         throw new Error(`lineage ${lineage} already exists; choose a new lineage id`)
       }
-      const usage = new UsageMeter()
       const thinking = pi.getThinkingLevel() as ThinkingLevel
       const isolation = await current.isolation()
       runtime = await current.roleRuntime(ctx, {
@@ -260,16 +265,30 @@ export default function piRsi(pi: ExtensionAPI): void {
         ...(params.target_fixtures !== undefined ? { targetFixtures: params.target_fixtures } : {}),
         ...(params.lineage !== undefined ? { lineage: params.lineage } : {}),
       }
+      const problem = validateRequest(request)
+      if (problem) throw new Error(problem)
       const lines: string[] = []
-      const { lineage, result, usage } = await runLineage(ctx, request, signal, line => {
-        lines.push(line)
-        onUpdate?.({ content: [{ type: 'text', text: lines.slice(-12).join('\n') }], details: undefined })
-      })
-      const snapshot = usage.snapshot()
-      return {
-        content: [{ type: 'text', text: `Lineage ${lineage} ended: ${result.termination}.\n${JSON.stringify(result, null, 2)}\n\nRole usage: ${usage.summary()}` }],
-        details: undefined,
-        ...(snapshot ? { usage: snapshot } : {}),
+      const usage = new UsageMeter()
+      try {
+        const { lineage, result } = await runLineage(ctx, request, signal, line => {
+          lines.push(line)
+          onUpdate?.({ content: [{ type: 'text', text: lines.slice(-12).join('\n') }], details: undefined })
+        }, usage)
+        const snapshot = usage.snapshot()
+        return {
+          content: [{ type: 'text', text: `Lineage ${lineage} ended: ${result.termination}.\n${JSON.stringify(result, null, 2)}\n\nRole usage: ${usage.summary()}` }],
+          details: undefined,
+          ...(snapshot ? { usage: snapshot } : {}),
+        }
+      } catch (error) {
+        // An unscored or cancelled lineage still spent its role calls: report them with the failure.
+        const snapshot = usage.snapshot()
+        return {
+          content: [{ type: 'text', text: `The lineage ended unscored: ${error instanceof Error ? error.message : String(error)}\n\nRole usage: ${usage.summary()}` }],
+          details: undefined,
+          isError: true,
+          ...(snapshot ? { usage: snapshot } : {}),
+        }
       }
     },
   })
@@ -368,6 +387,16 @@ export default function piRsi(pi: ExtensionAPI): void {
       const problem = validateRequest(request)
       if (problem) {
         ctx.ui.notify(`pi-rsi: ${problem}`, 'warning')
+        return
+      }
+      if (!ctx.hasUI) {
+        // Print and JSON modes end the session when the command returns: run the lineage in the foreground.
+        try {
+          const { lineage, result, usage } = await runLineage(ctx, request, undefined, line => process.stderr.write(`pi-rsi: ${line}\n`))
+          process.stderr.write(`pi-rsi: lineage ${lineage} ended: ${result.termination} (${usage.summary()})\n`)
+        } catch (error) {
+          process.stderr.write(`pi-rsi: exploration ended unscored: ${error instanceof Error ? error.message : String(error)}\n`)
+        }
         return
       }
       ctx.ui.notify(`pi-rsi: ${phase} exploration started; /rsi shows progress, /rsi-explore stop ends it`, 'info')

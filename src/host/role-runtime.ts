@@ -21,7 +21,7 @@ import { guardedFileTools } from './guarded-tools.ts'
 import { privatePathGuard, sandboxCommand, type IsolationDecision } from './sandbox.ts'
 import { UsageMeter } from './usage.ts'
 
-export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface ResolvedModel {
   model: Model<any>
@@ -182,7 +182,10 @@ class PiRoleConversation implements RoleConversation {
       const fileTools = this.#tools().filter(name => FILE_TOOLS.has(name))
       for (const tool of guardedFileTools(cwd, guard, fileTools)) pi.registerTool(tool)
       const bwrap = runtime.isolation.mode === 'sandbox' ? runtime.isolation.bwrap : undefined
+      const settings = runtime.settings ?? {}
       const bash = createBashToolDefinition(cwd, {
+        ...(typeof settings.shellPath === 'string' ? { shellPath: settings.shellPath } : {}),
+        ...(typeof settings.shellCommandPrefix === 'string' ? { commandPrefix: settings.shellCommandPrefix } : {}),
         spawnHook: ({ command, cwd: commandCwd, env }) => {
           const scratchEnv = { ...env, RSI_SCRATCH: scratch, TMPDIR: scratch }
           if (!bwrap) return { command, cwd: commandCwd, env: scratchEnv }
@@ -219,6 +222,10 @@ class PiRoleConversation implements RoleConversation {
       noThemes: true,
       noContextFiles: true,
       systemPrompt: system,
+      // Nothing a project (or a role) can write may reach a role's prompt: no SYSTEM.md, APPEND_SYSTEM.md, or AGENTS files.
+      systemPromptOverride: () => system,
+      appendSystemPromptOverride: () => [],
+      agentsFilesOverride: () => ({ agentsFiles: [] }),
       extensionFactories: [this.#extension()],
     })
     await resourceLoader.reload()
@@ -265,9 +272,14 @@ class PiRoleConversation implements RoleConversation {
           break
         case 'compaction_end':
           if (event.result && !event.aborted) {
+            this.runtime.usage.add(event.result.usage)
             this.#compacted = true
             this.#observe('compaction', event.reason)
           }
+          break
+        case 'entry_appended':
+          // Cache-warm refreshes and other billed side requests are recorded as usage entries.
+          if (event.entry.type === 'usage') this.runtime.usage.add((event.entry as { usage?: import('@earendil-works/pi-ai').Usage }).usage)
           break
         default:
           break

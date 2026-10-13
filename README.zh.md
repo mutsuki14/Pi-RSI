@@ -139,6 +139,7 @@ pi-rsi 读取 `~/.pi/agent/rsi.json`，项目受信任时再读取 `<project>/.p
 - **Phase 2 有预算上限**（默认 `deepPracticeBudget` 6、`targetCycleBudget` 6），RSIAgent 没有；长谱系请调高。练习预算用尽后，必须进行的全新目标测试仍会执行。
 - **记忆再提示**沿用 RSIAgent 的 `_memory_revisit`：在 Verifier 反馈之后、上下文压缩之后、会话恢复时触发；`stagnation`（重复低信息动作）触发器未实现。
 - **谱系在重启后不可恢复**；交互式学习阶段可以恢复。
+- **角色会话不加载任何扩展**，因此你自己的权限或守卫扩展看不到谱系 Actor、Curriculum 与 Verifier 的工具调用；pi-rsi 用自己的路径守卫与沙箱代替。
 - **分叉**：一个裁决在会话及其分叉之间只学习一次，先提升者生效。
 
 ## 开发

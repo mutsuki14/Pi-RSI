@@ -13,7 +13,7 @@ import { isAbsolute, join } from 'node:path'
  */
 
 export type Mode = 'learn' | 'frozen' | 'off'
-export type ThinkingSetting = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ThinkingSetting = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface RoleRouteConfig {
   /** Provider id, e.g. `anthropic`. Empty: the provider of the session's current model. */
@@ -146,7 +146,7 @@ function merge(base: unknown, override: unknown, path: string, unknown: string[]
   return out
 }
 
-const THINKING = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+const THINKING = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 function check(condition: boolean, message: string): void {
   if (!condition) throw new ConfigError(message)
