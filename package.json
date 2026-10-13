@@ -1,0 +1,53 @@
+{
+  "name": "pi-rsi",
+  "version": "0.1.0",
+  "description": "Recursive self-improvement for the pi coding agent: Actor-owned experience memory, an independent isolated Verifier Agent, and Curriculum-driven broad/deep exploration, after RSIAgent.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mutsuki14/Pi-RSI.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "self-improvement",
+    "agent-memory",
+    "verifier",
+    "curriculum"
+  ],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "files": [
+    "src",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "NOTICE",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test",
+    "e2e": "bash scripts/e2e-cli.sh"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@types/node": "^22.20.5",
+    "typebox": "1.3.27",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
