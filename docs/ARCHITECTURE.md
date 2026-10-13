@@ -20,12 +20,13 @@ pi-rsi has two layers.
 | `src/engine/steps.ts` | `STATUS: SUBMIT` handoffs, CLAIM/PROBE leads as LEAD blocks with a harness classification, one inspection, same-context learning (distill → reconcile → diagnosis → commit) | `_run_handoff_phase`, `loop.py` lead blocks, `_promote_learning` |
 | `src/engine/lineage.ts` | Phase 1 waves (snapshot, barrier, serial learning); Phase 2 attempts with a persistent Verifier, UNVERIFIED rounds, stall → forced inspection → resume, escalation route and Verifier swap; stop policies; `result.json`; per-role visible trees; private checkpoints | `phase1_wave.py`, `core/self_evolving_loop.py`, `unified_evolution.evolve_until_ready` |
 | `src/engine/workspace.ts` | Project manifests and change context for the Verifier, whole-tree fingerprints, exact copies | `loop._surface_delta` |
-| `src/host/role-runtime.ts` | `RoleRuntime` on `createAgentSession`: role system prompt, tool allow-list, no extensions/skills/context files, model route, memory tools bound to the engine's `MemoryBinding`, path guards, sandboxed bash, per-role scratch, truncation continuation, compaction re-pin, usage accounting, persisted transcripts | a fresh VM plus model client per role |
-| `src/host/sandbox.ts` | bubblewrap preflight, read-only (Verifier) and visibility (lineage Actor/Curriculum) sandboxes, private-path and sibling-project guards with physical path resolution | `verifier_runtime` effect-isolated namespaces |
+| `src/host/role-runtime.ts` | `RoleRuntime` on `createAgentSession`: role system prompt (no discovered SYSTEM/APPEND_SYSTEM/AGENTS files), tool allow-list, no extensions or skills, model route, memory tools bound to the engine's `MemoryBinding`, guarded file tools, sandboxed bash honouring the user's shell settings, per-role scratch, truncation continuation, compaction re-pin, usage accounting (including compaction and cache warming), provider failures as infrastructure, persisted transcripts | a fresh VM plus model client per role |
+| `src/host/guarded-tools.ts` | pi's built-in read/ls/grep/find/write/edit with filesystem operations routed through the path guard, so the guard sees the exact path pi opens | `validate_verifier_look_path` |
+| `src/host/sandbox.ts` | bubblewrap preflight; read-only (Verifier) and visibility (lineage Actor/Curriculum) sandboxes without capabilities; masks of hidden paths (the pi agent directory and pi-rsi state) with the role's own tree and scratch re-exposed; host IPC masked for the Verifier; the hidden-except-own path guard with physical resolution | `verifier_runtime` effect-isolated namespaces |
 | `src/host/probes.ts` | Runs Actor-proposed evidence probes once, after the checkpoint, and classifies them | Done-check execution and lead classification |
-| `src/host/checkpoint.ts` | Interactive candidate checkpoint (one listing method, stat-first sizing, detect-only above the caps) and a restore that never deletes pre-existing files | `_verify_candidate` rollback |
-| `src/host/git.ts` | Git that runs no repository-planted program while honouring global and system configuration; interactive change facts | `_surface_delta` |
-| `src/host/task-state.ts` | Interactive task state folded from state-tool `details` on the current session branch | Actor/Verifier loop state |
+| `src/host/checkpoint.ts` | Interactive candidate checkpoint (one listing method, stat-first sizing, detect-only above the caps), a restore that never deletes pre-existing files, and a repository-metadata checkpoint (refs, index, config, hooks) | `_verify_candidate` rollback |
+| `src/host/git.ts` | Git that runs no repository-planted program while honouring global and system configuration; interactive change facts since the task began (commits and uncommitted changes) | `_surface_delta` |
+| `src/host/task-state.ts` | Interactive task state folded from state-tool `details` on the current session branch, plus the task's first message and git baseline (recorded before every prompt) | Actor/Verifier loop state, attempt baseline |
 | `src/host/interactive.ts` | `rsi_submit`, `rsi_learn`, `rsi_memory_commit`, and the main session's memory tools | the target Actor/Verifier loop |
 | `src/host/explore.ts` | Lineage requests, engine configuration, progress text | `run_osworld.py` / `run_ale.py` lineage drivers |
 | `src/host/sealed.ts` | Sealed evaluation of a private final-candidate copy, checked against its digest, on frozen memory | official evaluator, `officialEvaluatorCalls = 0` during training |
@@ -53,6 +54,8 @@ pi-rsi has two layers.
 8. **Roles hear only the harness.** Role sessions load no extensions, skills, or context files; only the engine sends them messages.
 9. **Memory installs are recoverable.** A pending-commit record precedes every install; recovery either journals an installed tree or drops an install that never happened.
 10. **Lineage ids are unique.** Episode ids derive from the lineage id, so a reused id is refused rather than mistaken for an already promoted experience.
+11. **A verdict is never re-rolled.** A branch restarts only for runtime trouble before its Verifier's first report.
+12. **Roles see only their own tree.** Every role is kept out of the pi agent directory and pi-rsi state except its own tree and scratch; nothing a project contains reaches a role's system prompt.
 
 ## Why sessions instead of a handoff tool
 
