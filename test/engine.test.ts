@@ -14,6 +14,7 @@ const config: EngineConfig = {
   deepPracticeBudget: 3,
   targetCycleBudget: 6,
   unverifiedRounds: 2,
+  practiceUnverifiedRounds: 2,
   targetResumes: 1,
   branchRetries: 1,
   inventoryListed: 50,

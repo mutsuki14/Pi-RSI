@@ -72,6 +72,7 @@ export interface Config {
     deepPracticeBudget: number
     targetCycleBudget: number
     unverifiedRounds: number
+    practiceUnverifiedRounds: number
     targetResumes: number
     branchRetries: number
     stopPolicy: 'curriculum_review' | 'verifier_pass'
@@ -110,6 +111,7 @@ export const DEFAULT_CONFIG: Config = {
     deepPracticeBudget: 6,
     targetCycleBudget: 6,
     unverifiedRounds: 3,
+    practiceUnverifiedRounds: 8,
     targetResumes: 1,
     branchRetries: 1,
     stopPolicy: 'curriculum_review',
@@ -204,6 +206,7 @@ export function validate(config: Config): Config {
   natural(ex.deepPracticeBudget, 'exploration.deepPracticeBudget')
   natural(ex.targetCycleBudget, 'exploration.targetCycleBudget', 1)
   natural(ex.unverifiedRounds, 'exploration.unverifiedRounds', 1)
+  natural(ex.practiceUnverifiedRounds, 'exploration.practiceUnverifiedRounds', 1)
   natural(ex.targetResumes, 'exploration.targetResumes')
   natural(ex.branchRetries, 'exploration.branchRetries')
   oneOf(ex.stopPolicy, 'exploration.stopPolicy', ['curriculum_review', 'verifier_pass'])

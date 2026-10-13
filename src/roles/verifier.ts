@@ -35,7 +35,7 @@ candidate: those effects cannot be rolled back.`
 }
 
 /** Verifier system prompt (RSIAgent `AGENTIC_VERIFIER_SYSTEM`), adapted to pi tools. */
-export function verifierSystem(allowUnverified: boolean, mechanics: VerifierMechanics, scope: CheckpointScope = 'whole'): string {
+export function verifierSystem(allowUnverified: boolean, mechanics: VerifierMechanics, scope: CheckpointScope): string {
   const verdicts = allowUnverified
     ? 'VERDICT: PASS, VERDICT: FAIL, or VERDICT: UNVERIFIED'
     : 'VERDICT: PASS or VERDICT: FAIL'

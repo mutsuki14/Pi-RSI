@@ -33,6 +33,7 @@ export function engineConfig(config: Config, isolation: IsolationDecision, cross
     deepPracticeBudget: ex.deepPracticeBudget,
     targetCycleBudget: ex.targetCycleBudget,
     unverifiedRounds: ex.unverifiedRounds,
+    practiceUnverifiedRounds: ex.practiceUnverifiedRounds,
     targetResumes: ex.targetResumes,
     branchRetries: ex.branchRetries,
     // Lineage charters list the complete inventory, as RSIAgent does; the store caps its size.

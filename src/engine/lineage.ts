@@ -53,6 +53,11 @@ export interface EngineConfig {
   targetCycleBudget: number
   /** Consecutive failed submissions (UNVERIFIED rounds) before an attempt counts as stalled (RSIAgent max_consec_done). */
   unverifiedRounds: number
+  /**
+   * Phase 2 practice: UNVERIFIED rounds before the project ends as infrastructure (RSIAgent bounds evidence
+   * recovery by its cumulative iteration budgets, which allow many more rounds than a target attempt).
+   */
+  practiceUnverifiedRounds: number
   /** Phase 2: fresh-context resumes of a stalled target attempt. */
   targetResumes: number
   /** Restarts of a branch that hit runtime infrastructure trouble before a verdict (unscored). */
@@ -378,7 +383,7 @@ async function runProject(lineage: Lineage, project: WaveProject, options: Proje
 
     const view = options.phase2 ? join(options.episodeDir, 'original-fixtures') : undefined
     if (view) await stageReadOnlyView(options.fixtures, view)
-    const verifier = await lineage.open('verifier', `${project.id} verifier`, verifierSystem(options.phase2, config.verifierMechanics), root, { access: 'none' }, options.episodeDir)
+    const verifier = await lineage.open('verifier', `${project.id} verifier`, verifierSystem(options.phase2, config.verifierMechanics, 'whole'), root, { access: 'none' }, options.episodeDir)
     const reports: string[] = []
     try {
       let leads: Lead[] | undefined
@@ -404,7 +409,7 @@ async function runProject(lineage: Lineage, project: WaveProject, options: Proje
           return { project, verdict: result.verdict, reports, actor, binding }
         }
         // The role's own outcome, not runtime trouble: the branch is not restarted.
-        if (++failedRounds >= config.unverifiedRounds) throw new TransportInfraError(`${project.id}: ${failedRounds} UNVERIFIED rounds without a terminal verdict`)
+        if (++failedRounds >= config.practiceUnverifiedRounds) throw new TransportInfraError(`${project.id}: ${failedRounds} UNVERIFIED rounds without a terminal verdict`)
         handoff = await runHandoffPhase(actor, `${unverifiedMessage(result.report)}\n\n${memoryRevisit('verifier')}\n\n${leadsRequest()}`, config.transport, {
           validate: async body => (await shapeProblem(root)) ?? leadsProblem(body),
           ...(signal ? { signal } : {}),
@@ -590,7 +595,7 @@ async function runTargetAttempt(lineage: Lineage, cycle: number, target: string,
   let resumes = 0
   let binding = readBinding(store.canonicalDir)
   let actor = await lineage.open('actor', `target#${cycle} actor`, engineActorSystem(), root, binding, cycleDir)
-  let verifier = await lineage.open('verifier', `target#${cycle} verifier`, verifierSystem(true, config.verifierMechanics), root, { access: 'none' }, cycleDir)
+  let verifier = await lineage.open('verifier', `target#${cycle} verifier`, verifierSystem(true, config.verifierMechanics, 'whole'), root, { access: 'none' }, cycleDir)
   let generation = 0
   let swapped = false
   /** Reports of this attempt's Verifier so far; a swapped-in Verifier gets them once, on its first inspection. */
@@ -664,7 +669,7 @@ async function runTargetAttempt(lineage: Lineage, cycle: number, target: string,
             // once; later resumes keep that context.
             swapped = true
             await verifier.close()
-            verifier = await lineage.open('verifier', `target#${cycle} verifier (cross-model)`, verifierSystem(true, config.verifierMechanics), root, { access: 'none' }, cycleDir, 'actor')
+            verifier = await lineage.open('verifier', `target#${cycle} verifier (cross-model)`, verifierSystem(true, config.verifierMechanics, 'whole'), root, { access: 'none' }, cycleDir, 'actor')
             // RSIAgent starts the escalated Verifier in its own session: the earlier Verifier's history is not imported.
             handover = { priorReports: [] }
           }

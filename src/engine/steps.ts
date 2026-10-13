@@ -18,6 +18,12 @@ export function parseSubmitHandoff(text: string): string | undefined {
   return lines.slice(first + 1).join('\n').trim()
 }
 
+/** Markdown inline code around a one-line probe is formatting, not a command substitution. */
+export function normalizeProbe(probe: string): string {
+  const ticked = /^`([^`]+)`$/.exec(probe.trim())
+  return ticked ? ticked[1]!.trim() : probe.trim()
+}
+
 export interface Lead {
   claim: string
   probe: string
@@ -51,10 +57,8 @@ function scanLeads(handoff: string): LeadScan {
     const number = leads.length + problems.length + 1
     let probe = probeMatch[1]!.trim()
     const inline = INLINE_FENCE.exec(probe)
-    const ticked = /^`([^`]+)`$/.exec(probe)
     if (inline) probe = inline[2]!.trim()
-    // Markdown inline code around a one-line probe is formatting, not a command substitution.
-    else if (ticked) probe = ticked[1]!.trim()
+    else if (/^`[^`]+`$/.test(probe)) probe = normalizeProbe(probe)
     else if (probe === '' || FENCE_OPENER.test(probe)) {
       // A multi-line probe: the fenced block opening on this line or the next non-empty one.
       let open = index

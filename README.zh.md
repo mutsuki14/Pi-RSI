@@ -47,6 +47,8 @@ pi 的主代理就是 Actor。pi-rsi 在它的系统提示中加入 RSI 协议�
      → rsi_memory_commit（第二次）：原子提升、写入日志、记录前后树哈希
 ```
 
+Verifier 收到的权威任务是“任务开始以来”的用户消息：任务从对话的第一条消息、一次学习提交之后、一次 PASS 之后，或以 `new_task: true` 调用 `rsi_submit` 的位置开始。变更事实包括自那时起的提交与未提交改动（pi-rsi 在每次提示前记录项目的 `HEAD`）。
+
 任务状态（Verifier 代次、报告引用、裁决、学习阶段）从 pi 会话当前分支上的工具结果折叠得到，因此会随 `/tree`、分叉与恢复会话而变化；草稿和报告保存在磁盘上，学习阶段在重启后仍然有效。
 
 ### 探索谱系（`rsi_explore` 工具，`/rsi-explore` 命令）
@@ -98,7 +100,7 @@ pi 的主代理就是 Actor。pi-rsi 在它的系统提示中加入 RSI 协议�
 |---|---|---|
 | `rsi_memory_list` / `rsi_memory_read` / `rsi_memory_search` | Actor、Curriculum（除非 `curriculumMemoryAccess: none`） | 查看记忆（学习阶段中查看草稿） |
 | `rsi_memory_write` / `rsi_memory_delete` | Actor，仅限学习阶段 | 编辑草稿 |
-| `rsi_submit` | 主 Actor | 请求独立验证；UNVERIFIED 之后传入 `evidence_leads`（claim 与 probe 成对） |
+| `rsi_submit` | 主 Actor | 请求独立验证；UNVERIFIED 之后传入 `evidence_leads`（claim 与 probe 成对）；与之前提交不是同一任务时传入 `new_task: true` |
 | `rsi_learn` | 主 Actor | 终局裁决后开启学习阶段 |
 | `rsi_memory_commit` | 主 Actor | 第一次：对账；第二次：原子提升 |
 | `rsi_explore` | 主 Actor | 运行 `broad` 或 `deep` 谱系（阻塞直到结束） |
@@ -113,6 +115,7 @@ pi-rsi 读取 `~/.pi/agent/rsi.json`，项目受信任时再读取 `<project>/.p
 - `mode`：`learn`、`frozen`（Phase 3 测试时复用；学习类工具被停用）或 `off`。
 - `memoryDir` / `stateDir`：留空即 `~/.pi/agent/rsi/projects/<项目>-<哈希>/{store,…}`，位于项目之外。
 - `roles`：可选的角色模型路由；留空的字段继承会话当前的模型与思考级别。Verifier 使用不同的模型可以增强独立性。设置 `escalation` 后，恢复的目标 Actor 使用它；若它与 Verifier 的路由相同，该段的 Verifier 会改用 Actor 的路由一次。
+- `exploration.unverifiedRounds`：目标尝试连续 UNVERIFIED 达到该次数即视为停滞（RSIAgent `max_consec_done`）；`exploration.practiceUnverifiedRounds`：Phase 2 练习项目证据回合的上限。
 - `audit.sealedTexts`：记忆中绝不能引用的材料（如留出的评测任务）；任何 8 词重叠都会隔离该次提交。
 - `evaluation.command`：`/rsi-eval` 使用的密封评测器命令。它在最终候选结果的私有副本中运行，环境变量 `RSI_CANDIDATE_ROOT` 与 `RSI_TASK_FILE` 已设置，最后一行输出 `{"score": n}`；运行前先冻结记忆，并在前后校验树哈希。结果只写到磁盘供人查看，永远不会进入代理。
 

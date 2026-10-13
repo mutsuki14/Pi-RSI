@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
-import { inspect, formatLeads, type Lead } from '../engine/steps.ts'
+import { inspect, formatLeads, normalizeProbe, type Lead } from '../engine/steps.ts'
 import type { Verdict } from '../protocol/tokens.ts'
 import { MemoryConflictError, MemoryFrozenError, MemoryQuarantineError, type MemoryStore } from '../memory/store.ts'
 import { disagreementMessage, distillationMessage, memoryRevisit, reconciliationMessage, unverifiedMessage } from '../roles/actor.ts'
@@ -182,7 +182,7 @@ export function registerInteractive({ pi, register, host: hostOf }: InteractiveD
         }
         let leads: string | undefined
         if (task.verdict === 'UNVERIFIED' && params.evidence_leads?.length) {
-          const given: Lead[] = params.evidence_leads.map(lead => ({ claim: lead.claim ?? '', probe: lead.probe ?? '' })).filter(lead => lead.probe.trim() !== '')
+          const given: Lead[] = params.evidence_leads.map(lead => ({ claim: lead.claim ?? '', probe: normalizeProbe(lead.probe ?? '') })).filter(lead => lead.probe !== '')
           // Probes run after the checkpoint: their effects are restored with the Verifier's.
           if (given.length > 0) {
             leads = formatLeads(await classifyLeads(given, { cwd, isolation, hidden: host.hiddenPaths(ctx), scratchRoot: host.paths.scratch, timeoutMs: 60_000, ...(signal ? { signal } : {}) }))
@@ -191,10 +191,13 @@ export function registerInteractive({ pi, register, host: hostOf }: InteractiveD
             if (gitMeta) probeEffects = [...probeEffects, ...(await gitMeta.restore())]
           }
         }
+        const unrestored = !checkpoint.restores && probeEffects.length > 0
+          ? `\n\nPATHS CHANGED BY THE ACTOR'S EVIDENCE PROBES (not restored; not part of the submitted work):\n${probeEffects.slice(0, 50).map(path => `  ${path}`).join('\n')}`
+          : ''
         inspection = await inspect(live.conversation, {
           task: authoritativeTask(scope, host.config.verifier.taskMessages),
           generation,
-          mechanicalContext: before.summary,
+          mechanicalContext: before.summary + unrestored,
           ...(leads ? { leads } : {}),
           ...(priorReports.length > 0 ? { priorReports } : {}),
           allowUnverified: host.config.verifier.allowUnverified,
@@ -231,7 +234,11 @@ export function registerInteractive({ pi, register, host: hostOf }: InteractiveD
         return failure(`verification is unavailable: ${inspection.reason}. This is an infrastructure failure, not a verdict.`)
       }
       try {
-        const probeNote = probeEffects.length === 0 ? '' : `\n\nHARNESS NOTE: your evidence probes changed ${probeEffects.length} path(s), restored before the inspection: ${probeEffects.slice(0, 20).join(', ')}`
+        const probeNote = probeEffects.length === 0
+          ? ''
+          : checkpoint.restores
+            ? `\n\nHARNESS NOTE: your evidence probes changed ${probeEffects.length} path(s), restored before the inspection: ${probeEffects.slice(0, 20).join(', ')}`
+            : `\n\nHARNESS NOTE: your evidence probes changed ${probeEffects.length} path(s) that could not be restored (the workspace is too large to checkpoint): ${probeEffects.slice(0, 20).join(', ')}`
         const note = probeNote + (changed.length === 0
           ? ''
           : checkpoint.restores

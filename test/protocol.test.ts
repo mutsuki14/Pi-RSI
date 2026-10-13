@@ -173,14 +173,18 @@ describe('memoryPreamble', () => {
 
 describe('verifier prompt', () => {
   it('claims only the isolation the sandbox provides', () => {
-    const sandbox = verifierSystem(false, 'sandbox')
+    const sandbox = verifierSystem(false, 'sandbox', 'whole')
     expect(sandbox).toContain('never mutate live')
     expect(sandbox).toContain('Network access is NOT isolated')
     expect(sandbox).toContain('$RSI_SCRATCH')
     expect(sandbox).not.toContain('effect-isolated')
-    const rollback = verifierSystem(true, 'rollback')
+    const rollback = verifierSystem(true, 'rollback', 'partial')
     expect(rollback).toContain('restores it afterwards')
+    expect(rollback).toContain('Ignored files')
     expect(rollback).toContain('VERDICT: UNVERIFIED')
+    // Lineage candidates are copied whole: their Verifier may build and test freely.
+    expect(verifierSystem(true, 'rollback', 'whole')).toContain('copies the whole candidate tree')
+    expect(verifierSystem(true, 'rollback', 'whole')).not.toContain('Ignored files')
   })
 })
 

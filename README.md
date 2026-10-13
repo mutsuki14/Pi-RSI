@@ -47,6 +47,8 @@ task → Actor works (memory read as hints, via rsi_memory_list / _search / _rea
      → rsi_memory_commit (second call): atomic promotion, journal entry, before/after tree hashes
 ```
 
+The Verifier's authoritative task is the user's messages since the task began: a task begins at the conversation's first message, after a promoted learning phase, after a PASS, or where `rsi_submit` is called with `new_task: true`. Its change facts are commits and uncommitted changes since that point (pi-rsi records the project's `HEAD` before every prompt).
+
 The task state (Verifier generation, report references, verdict, learning stage) is folded from the tool results on the current branch of the pi session, so it follows `/tree`, forks, and resumes; drafts and reports live on disk, so a learning phase survives a restart.
 
 ### Exploration lineages (`rsi_explore` tool, `/rsi-explore` command)
@@ -98,7 +100,7 @@ Host-side `git` (change facts, checkpoints) never runs repository-planted progra
 |---|---|---|
 | `rsi_memory_list` / `rsi_memory_read` / `rsi_memory_search` | Actor, Curriculum (unless `curriculumMemoryAccess: none`) | inspect memory (the draft, during a learning phase) |
 | `rsi_memory_write` / `rsi_memory_delete` | Actor, learning phase only | edit the draft |
-| `rsi_submit` | main Actor | request independent verification; pass `evidence_leads` (claim + probe pairs) after an UNVERIFIED |
+| `rsi_submit` | main Actor | request independent verification; pass `evidence_leads` (claim + probe pairs) after an UNVERIFIED, and `new_task: true` when the work is a different task than earlier submissions |
 | `rsi_learn` | main Actor | open the learning phase after a terminal verdict |
 | `rsi_memory_commit` | main Actor | first call: reconcile; second call: promote atomically |
 | `rsi_explore` | main Actor | run a `broad` or `deep` lineage (blocks until it ends) |
@@ -140,6 +142,7 @@ pi-rsi reads `~/.pi/agent/rsi.json`, then `<project>/.pi/rsi.json` when the proj
     "deepPracticeBudget": 6,
     "targetCycleBudget": 6,
     "unverifiedRounds": 3,
+    "practiceUnverifiedRounds": 8,
     "targetResumes": 1,
     "branchRetries": 1,
     "stopPolicy": "curriculum_review",
@@ -152,6 +155,7 @@ pi-rsi reads `~/.pi/agent/rsi.json`, then `<project>/.pi/rsi.json` when the proj
 - `mode`: `learn`, `frozen` (Phase 3 test-time reuse; learning tools are deactivated), or `off`.
 - `memoryDir` / `stateDir`: empty means `~/.pi/agent/rsi/projects/<project>-<hash>/{store,…}`, outside the project.
 - `roles`: optional model routes; empty fields inherit the session's current model and thinking level. A different Verifier model strengthens independence. When `escalation` is set, a resumed target Actor uses it; when it equals the Verifier route, that segment's Verifier takes the Actor route once.
+- `exploration.unverifiedRounds` stalls a target attempt after that many UNVERIFIED rounds (RSIAgent `max_consec_done`); `exploration.practiceUnverifiedRounds` bounds a Phase 2 practice project's evidence rounds.
 - `audit.sealedTexts`: material memory must never quote (e.g. held-out evaluation tasks); any 8-word overlap quarantines the commit.
 - `evaluation.command`: argv of a sealed evaluator for `/rsi-eval`. It runs in a private copy of the final candidate with `RSI_CANDIDATE_ROOT` and `RSI_TASK_FILE` set and prints `{"score": n}` as its last line; memory is frozen first and its tree hash is checked before and after. The result is written to disk for the human and never reaches an agent.
 
